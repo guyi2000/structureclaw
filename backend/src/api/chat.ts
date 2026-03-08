@@ -28,6 +28,7 @@ const createConversationSchema = z.object({
 
 const executeSchema = z.object({
   message: z.string().min(1).max(10000),
+  conversationId: z.string().optional(),
   context: z.object({
     model: z.record(z.any()).optional(),
     modelFormat: z.string().optional(),
@@ -79,6 +80,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
       const result = await agentService.run({
         message: body.message,
         mode: 'execute',
+        conversationId: body.conversationId,
         context: {
           model: body.context?.model,
           modelFormat: body.context?.modelFormat,
@@ -173,6 +175,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
       const stream = agentService.runStream({
         message: body.message,
         mode: 'execute',
+        conversationId: body.conversationId,
         context: {
           model: body.context?.model,
           modelFormat: body.context?.modelFormat,
@@ -218,6 +221,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
         required: ['message'],
         properties: {
           message: { type: 'string' },
+          conversationId: { type: 'string' },
           context: { type: 'object' },
         },
       },

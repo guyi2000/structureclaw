@@ -3,13 +3,43 @@ import { ChatOpenAI } from '@langchain/openai';
 import { randomUUID } from 'crypto';
 import { config } from '../config/index.js';
 import { createChatModel } from '../utils/llm.js';
+import { logger } from '../utils/logger.js';
 
 export type AgentToolName = 'text-to-model-draft' | 'convert' | 'validate' | 'analyze' | 'code-check';
 export type AgentRunMode = 'chat' | 'execute' | 'auto';
 
+type InferredModelType = 'beam' | 'truss' | 'portal-frame' | 'double-span-beam' | 'unknown';
+
+interface DraftState {
+  inferredType: InferredModelType;
+  lengthM?: number;
+  spanLengthM?: number;
+  heightM?: number;
+  loadKN?: number;
+  updatedAt: number;
+}
+
+interface DraftExtraction {
+  inferredType?: InferredModelType;
+  lengthM?: number;
+  spanLengthM?: number;
+  heightM?: number;
+  loadKN?: number;
+}
+
+interface DraftResult {
+  inferredType: InferredModelType;
+  missingFields: string[];
+  model?: Record<string, unknown>;
+  extractionMode: 'llm' | 'rule-based';
+  stateToPersist?: DraftState;
+}
+
 export interface AgentRunParams {
   message: string;
   mode?: AgentRunMode;
+  conversationId?: string;
+  traceId?: string;
   context?: {
     model?: Record<string, unknown>;
     modelFormat?: string;
@@ -39,8 +69,13 @@ export interface AgentProtocol {
 export interface AgentToolCall {
   tool: AgentToolName;
   input: Record<string, unknown>;
+  status: 'success' | 'error';
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
   output?: unknown;
   error?: string;
+  errorCode?: string;
 }
 
 export interface AgentRunResult {
@@ -53,6 +88,10 @@ export interface AgentRunResult {
   toolCalls: AgentToolCall[];
   model?: Record<string, unknown>;
   analysis?: unknown;
+  metrics?: {
+    toolCount: number;
+    failedToolCount: number;
+  };
   clarification?: {
     missingFields: string[];
     question: string;
@@ -69,6 +108,8 @@ export interface AgentStreamChunk {
 export class AgentService {
   private readonly engineClient: AxiosInstance;
   private readonly llm: ChatOpenAI | null;
+  private static readonly draftStates = new Map<string, DraftState>();
+  private static readonly draftStateTtlMs = 30 * 60 * 1000;
 
   constructor() {
     this.engineClient = axios.create({
@@ -90,13 +131,14 @@ export class AgentService {
     ];
 
     return {
-      version: '1.0.0',
+      version: '1.1.0',
       runRequestSchema: {
         type: 'object',
         required: ['message'],
         properties: {
           message: { type: 'string' },
           mode: { enum: ['chat', 'execute', 'auto'] },
+          conversationId: { type: 'string' },
           context: {
             type: 'object',
             properties: {
@@ -122,6 +164,13 @@ export class AgentService {
           toolCalls: { type: 'array', items: { type: 'object' } },
           model: { type: 'object' },
           analysis: { type: 'object' },
+          metrics: {
+            type: 'object',
+            properties: {
+              toolCount: { type: 'number' },
+              failedToolCount: { type: 'number' },
+            },
+          },
           response: { type: 'string' },
         },
       },
@@ -161,7 +210,7 @@ export class AgentService {
       tools: [
         {
           name: 'text-to-model-draft',
-          description: '从自然语言生成最小可计算 StructureModel v1 草案（规则版）',
+          description: '从自然语言生成最小可计算 StructureModel v1 草案（LLM+规则混合）',
           inputSchema: {
             type: 'object',
             required: ['message'],
@@ -174,6 +223,7 @@ export class AgentService {
             properties: {
               inferredType: { type: 'string' },
               missingFields: { type: 'array', items: { type: 'string' } },
+              extractionMode: { enum: ['llm', 'rule-based'] },
               model: { type: 'object' },
             },
           },
@@ -273,8 +323,40 @@ export class AgentService {
   }
 
   async run(params: AgentRunParams): Promise<AgentRunResult> {
-    const startedAt = Date.now();
+    const traceId = params.traceId || randomUUID();
+    return this.runInternal(params, traceId);
+  }
+
+  async *runStream(params: AgentRunParams): AsyncGenerator<AgentStreamChunk> {
     const traceId = randomUUID();
+    try {
+      yield {
+        type: 'start',
+        content: {
+          traceId,
+          mode: params.mode || 'auto',
+          conversationId: params.conversationId,
+        },
+      };
+
+      const result = await this.runInternal({ ...params, traceId }, traceId);
+      yield {
+        type: 'result',
+        content: result,
+      };
+      yield { type: 'done' };
+    } catch (error: any) {
+      yield {
+        type: 'error',
+        error: this.stringifyError(error),
+      };
+    }
+  }
+
+  private async runInternal(params: AgentRunParams, traceId: string): Promise<AgentRunResult> {
+    const startedAt = Date.now();
+    this.cleanupDraftStates();
+
     const runMode: AgentRunMode = params.mode || 'auto';
     if (runMode === 'chat') {
       const response = await this.renderSummary(params.message, '已收到你的问题。当前为纯聊天模式，未触发结构工具调用。');
@@ -286,6 +368,10 @@ export class AgentService {
         needsModelInput: false,
         plan: ['纯聊天模式：不调用结构工具'],
         toolCalls: [],
+        metrics: {
+          toolCount: 0,
+          failedToolCount: 0,
+        },
         response,
       };
     }
@@ -300,19 +386,30 @@ export class AgentService {
     const toolCalls: AgentToolCall[] = [];
     const mode: 'rule-based' | 'llm-assisted' = this.llm ? 'llm-assisted' : 'rule-based';
 
+    const sessionKey = params.conversationId?.trim();
+    const existingState = sessionKey ? AgentService.draftStates.get(sessionKey) : undefined;
+
     let normalizedModel = modelInput;
     if (!normalizedModel) {
-      plan.push('从自然语言生成结构模型草案');
-      const draftCall: AgentToolCall = {
-        tool: 'text-to-model-draft',
-        input: { message: params.message },
-      };
+      plan.push('从自然语言生成结构模型草案（支持会话级补数）');
+      const draftCall = this.startToolCall('text-to-model-draft', { message: params.message, conversationId: sessionKey });
       toolCalls.push(draftCall);
-      const draft = this.textToModelDraft(params.message);
-      draftCall.output = draft;
+
+      const draft = await this.textToModelDraft(params.message, existingState);
+      this.completeToolCallSuccess(draftCall, {
+        inferredType: draft.inferredType,
+        missingFields: draft.missingFields,
+        extractionMode: draft.extractionMode,
+        modelGenerated: Boolean(draft.model),
+      });
 
       if (!draft.model) {
-        return {
+        if (sessionKey && draft.stateToPersist) {
+          AgentService.draftStates.set(sessionKey, draft.stateToPersist);
+        }
+
+        const question = this.buildClarificationQuestion(draft.missingFields);
+        const result: AgentRunResult = {
           traceId,
           durationMs: Date.now() - startedAt,
           success: false,
@@ -320,14 +417,21 @@ export class AgentService {
           needsModelInput: true,
           plan,
           toolCalls,
+          metrics: this.buildMetrics(toolCalls),
           clarification: {
             missingFields: draft.missingFields,
-            question: `请补充以下信息：${draft.missingFields.join('、')}`,
+            question,
           },
           response: `无法从文本直接生成可计算模型，缺少：${draft.missingFields.join('、')}。`,
         };
+
+        this.logRunResult(traceId, sessionKey, result);
+        return result;
       }
 
+      if (sessionKey) {
+        AgentService.draftStates.delete(sessionKey);
+      }
       normalizedModel = draft.model;
     }
 
@@ -339,16 +443,16 @@ export class AgentService {
         target_format: 'structuremodel-v1',
         target_schema_version: '1.0.0',
       };
-      const convertCall: AgentToolCall = { tool: 'convert', input: convertInput };
+      const convertCall = this.startToolCall('convert', convertInput);
       toolCalls.push(convertCall);
 
       try {
         const converted = await this.engineClient.post('/convert', convertInput);
-        convertCall.output = converted.data;
+        this.completeToolCallSuccess(convertCall, converted.data);
         normalizedModel = (converted.data?.model ?? {}) as Record<string, unknown>;
       } catch (error: any) {
-        convertCall.error = this.stringifyError(error);
-        return {
+        this.completeToolCallError(convertCall, error);
+        const result: AgentRunResult = {
           traceId,
           durationMs: Date.now() - startedAt,
           success: false,
@@ -356,32 +460,57 @@ export class AgentService {
           needsModelInput: false,
           plan,
           toolCalls,
+          metrics: this.buildMetrics(toolCalls),
           response: `模型格式转换失败：${convertCall.error}`,
         };
+        this.logRunResult(traceId, sessionKey, result);
+        return result;
       }
     }
 
     plan.push('校验模型字段与引用完整性');
     const validateInput = { model: normalizedModel };
-    const validateCall: AgentToolCall = { tool: 'validate', input: validateInput };
+    const validateCall = this.startToolCall('validate', validateInput);
     toolCalls.push(validateCall);
 
     try {
       const validated = await this.engineClient.post('/validate', validateInput);
-      validateCall.output = validated.data;
-    } catch (error: any) {
-      validateCall.error = this.stringifyError(error);
-        return {
+      this.completeToolCallSuccess(validateCall, validated.data);
+      if (validated.data?.valid === false) {
+        validateCall.status = 'error';
+        validateCall.errorCode = validated.data?.errorCode || 'INVALID_STRUCTURE_MODEL';
+        validateCall.error = validated.data?.message || '模型校验失败';
+        const result: AgentRunResult = {
           traceId,
           durationMs: Date.now() - startedAt,
           success: false,
+          mode,
+          needsModelInput: false,
+          plan,
+          toolCalls,
+          model: normalizedModel,
+          metrics: this.buildMetrics(toolCalls),
+          response: `模型校验失败：${validateCall.error}`,
+        };
+        this.logRunResult(traceId, sessionKey, result);
+        return result;
+      }
+    } catch (error: any) {
+      this.completeToolCallError(validateCall, error);
+      const result: AgentRunResult = {
+        traceId,
+        durationMs: Date.now() - startedAt,
+        success: false,
         mode,
         needsModelInput: false,
         plan,
         toolCalls,
         model: normalizedModel,
+        metrics: this.buildMetrics(toolCalls),
         response: `模型校验失败：${validateCall.error}`,
       };
+      this.logRunResult(traceId, sessionKey, result);
+      return result;
     }
 
     if (!autoAnalyze) {
@@ -389,7 +518,7 @@ export class AgentService {
         params.message,
         '模型已通过校验。根据配置未自动执行 analyze。',
       );
-      return {
+      const result: AgentRunResult = {
         traceId,
         durationMs: Date.now() - startedAt,
         success: true,
@@ -398,8 +527,11 @@ export class AgentService {
         plan,
         toolCalls,
         model: normalizedModel,
+        metrics: this.buildMetrics(toolCalls),
         response,
       };
+      this.logRunResult(traceId, sessionKey, result);
+      return result;
     }
 
     plan.push(`执行 ${analysisType} 分析并返回摘要`);
@@ -408,19 +540,19 @@ export class AgentService {
       model: normalizedModel,
       parameters: analysisParameters,
     };
-    const analyzeCall: AgentToolCall = { tool: 'analyze', input: analyzeInput };
+    const analyzeCall = this.startToolCall('analyze', analyzeInput);
     toolCalls.push(analyzeCall);
 
     try {
       const analyzed = await this.engineClient.post('/analyze', analyzeInput);
-      analyzeCall.output = analyzed.data;
+      this.completeToolCallSuccess(analyzeCall, analyzed.data);
 
       const response = await this.renderSummary(
         params.message,
         `分析完成。analysis_type=${analysisType}, success=${String(analyzed.data?.success ?? false)}`,
       );
 
-      return {
+      const result: AgentRunResult = {
         traceId,
         durationMs: Date.now() - startedAt,
         success: Boolean(analyzed.data?.success),
@@ -430,11 +562,14 @@ export class AgentService {
         toolCalls,
         model: normalizedModel,
         analysis: analyzed.data,
+        metrics: this.buildMetrics(toolCalls),
         response,
       };
+      this.logRunResult(traceId, sessionKey, result);
+      return result;
     } catch (error: any) {
-      analyzeCall.error = this.stringifyError(error);
-      return {
+      this.completeToolCallError(analyzeCall, error);
+      const result: AgentRunResult = {
         traceId,
         durationMs: Date.now() - startedAt,
         success: false,
@@ -443,33 +578,11 @@ export class AgentService {
         plan,
         toolCalls,
         model: normalizedModel,
+        metrics: this.buildMetrics(toolCalls),
         response: `分析执行失败：${analyzeCall.error}`,
       };
-    }
-  }
-
-  async *runStream(params: AgentRunParams): AsyncGenerator<AgentStreamChunk> {
-    const traceId = randomUUID();
-    try {
-      yield {
-        type: 'start',
-        content: {
-          traceId,
-          mode: params.mode || 'auto',
-        },
-      };
-
-      const result = await this.run(params);
-      yield {
-        type: 'result',
-        content: { ...result, traceId: result.traceId || traceId },
-      };
-      yield { type: 'done' };
-    } catch (error: any) {
-      yield {
-        type: 'error',
-        error: this.stringifyError(error),
-      };
+      this.logRunResult(traceId, sessionKey, result);
+      return result;
     }
   }
 
@@ -509,114 +622,471 @@ export class AgentService {
     }
   }
 
-  private stringifyError(error: any): string {
-    if (error?.response?.data) {
-      return JSON.stringify(error.response.data);
-    }
-    if (error?.message) {
-      return String(error.message);
-    }
-    return 'Unknown error';
-  }
+  private async textToModelDraft(message: string, existingState?: DraftState): Promise<DraftResult> {
+    const llmExtraction = await this.tryLlmExtract(message, existingState);
+    const extractionMode: 'llm' | 'rule-based' = llmExtraction ? 'llm' : 'rule-based';
 
-  private textToModelDraft(message: string): {
-    inferredType: 'beam' | 'truss' | 'unknown';
-    missingFields: string[];
-    model?: Record<string, unknown>;
-  } {
-    const text = message.toLowerCase();
-    const isBeam = text.includes('beam') || text.includes('梁') || text.includes('悬臂');
-    const isTruss = text.includes('truss') || text.includes('桁架');
+    const mergedState = this.mergeDraftState(
+      existingState,
+      llmExtraction || this.extractDraftByRules(message),
+    );
 
-    const inferredType: 'beam' | 'truss' | 'unknown' = isBeam ? 'beam' : (isTruss ? 'truss' : 'unknown');
-    const missingFields: string[] = [];
-
-    const length = this.extractNumber(text, [
-      /(\d+(?:\.\d+)?)\s*(?:m|米|meter|meters)/i,
-    ]);
-    const load = this.extractNumber(text, [
-      /(\d+(?:\.\d+)?)\s*(?:kn|千牛)/i,
-    ]);
-
-    if (inferredType === 'unknown') {
-      missingFields.push('结构类型（梁或桁架）');
-    }
-    if (length === null) {
-      missingFields.push('跨度/长度（m）');
-    }
-    if (load === null) {
-      missingFields.push('荷载大小（kN）');
-    }
-
-    if (missingFields.length > 0 || length === null || load === null) {
-      return { inferredType, missingFields };
-    }
-
-    if (inferredType === 'truss') {
+    const missingFields = this.computeMissingFields(mergedState);
+    if (missingFields.length > 0) {
       return {
-        inferredType,
-        missingFields: [],
-        model: {
-          schema_version: '1.0.0',
-          nodes: [
-            { id: '1', x: 0, y: 0, z: 0, restraints: [true, false, true, false, false, false] },
-            { id: '2', x: length, y: 0, z: 0, restraints: [false, false, true, false, false, false] },
-          ],
-          elements: [
-            { id: '1', type: 'truss', nodes: ['1', '2'], material: '1', section: '1' },
-          ],
-          materials: [
-            { id: '1', name: 'steel', E: 200000, nu: 0.3, rho: 7850 },
-          ],
-          sections: [
-            { id: '1', name: 'A1', type: 'rod', properties: { A: 0.01 } },
-          ],
-          load_cases: [
-            { id: 'LC1', type: 'other', loads: [{ node: '2', fx: load }] },
-          ],
-          load_combinations: [],
-          metadata: { source: 'text-draft', inferredType },
-        },
+        inferredType: mergedState.inferredType,
+        missingFields,
+        extractionMode,
+        stateToPersist: mergedState,
       };
     }
 
     return {
-      inferredType: 'beam',
+      inferredType: mergedState.inferredType,
       missingFields: [],
-      model: {
+      extractionMode,
+      model: this.buildModel(mergedState),
+    };
+  }
+
+  private mergeDraftState(existing: DraftState | undefined, patch: DraftExtraction): DraftState {
+    const mergedType = patch.inferredType && patch.inferredType !== 'unknown'
+      ? patch.inferredType
+      : (existing?.inferredType || 'unknown');
+    const mergedLength = patch.lengthM ?? existing?.lengthM;
+    const mergedSpan = patch.spanLengthM ?? existing?.spanLengthM;
+    const spanLengthM = mergedSpan ?? (
+      (mergedType === 'portal-frame' || mergedType === 'double-span-beam')
+        ? mergedLength
+        : undefined
+    );
+
+    return {
+      inferredType: mergedType,
+      lengthM: mergedLength,
+      spanLengthM,
+      heightM: patch.heightM ?? existing?.heightM,
+      loadKN: patch.loadKN ?? existing?.loadKN,
+      updatedAt: Date.now(),
+    };
+  }
+
+  private computeMissingFields(state: DraftState): string[] {
+    const missing: string[] = [];
+    if (state.inferredType === 'unknown') {
+      missing.push('结构类型（门式刚架/双跨梁/梁/平面桁架）');
+      return missing;
+    }
+
+    if (state.inferredType === 'portal-frame') {
+      if (state.spanLengthM === undefined) {
+        missing.push('门式刚架跨度（m）');
+      }
+      if (state.heightM === undefined) {
+        missing.push('门式刚架柱高（m）');
+      }
+      if (state.loadKN === undefined) {
+        missing.push('荷载大小（kN）');
+      }
+      return missing;
+    }
+
+    if (state.inferredType === 'double-span-beam') {
+      if (state.spanLengthM === undefined) {
+        missing.push('每跨跨度（m）');
+      }
+      if (state.loadKN === undefined) {
+        missing.push('荷载大小（kN）');
+      }
+      return missing;
+    }
+
+    if (state.lengthM === undefined) {
+      missing.push('跨度/长度（m）');
+    }
+    if (state.loadKN === undefined) {
+      missing.push('荷载大小（kN）');
+    }
+    return missing;
+  }
+
+  private buildModel(state: DraftState): Record<string, unknown> {
+    const metadata = {
+      source: 'text-draft-hybrid',
+      inferredType: state.inferredType,
+    };
+
+    if (state.inferredType === 'truss') {
+      const length = state.lengthM!;
+      const load = state.loadKN!;
+      return {
         schema_version: '1.0.0',
+        unit_system: 'SI',
         nodes: [
-          { id: '1', x: 0, y: 0, z: 0, restraints: [true, false, true, false, true, false] },
-          { id: '2', x: length, y: 0, z: 0 },
+          { id: '1', x: 0, y: 0, z: 0, restraints: [true, true, true, true, true, true] },
+          { id: '2', x: length, y: 0, z: 0, restraints: [false, true, true, true, true, true] },
+        ],
+        elements: [
+          { id: '1', type: 'truss', nodes: ['1', '2'], material: '1', section: '1' },
+        ],
+        materials: [
+          { id: '1', name: 'steel', E: 205000, nu: 0.3, rho: 7850 },
+        ],
+        sections: [
+          { id: '1', name: 'T1', type: 'rod', properties: { A: 0.01 } },
+        ],
+        load_cases: [
+          { id: 'LC1', type: 'other', loads: [{ node: '2', fx: load }] },
+        ],
+        load_combinations: [{ id: 'ULS', factors: { LC1: 1.0 } }],
+        metadata,
+      };
+    }
+
+    if (state.inferredType === 'double-span-beam') {
+      const span = state.spanLengthM!;
+      const load = state.loadKN!;
+      return {
+        schema_version: '1.0.0',
+        unit_system: 'SI',
+        nodes: [
+          { id: '1', x: 0, y: 0, z: 0, restraints: [true, true, true, true, true, true] },
+          { id: '2', x: span, y: 0, z: 0 },
+          { id: '3', x: span * 2, y: 0, z: 0, restraints: [false, true, true, true, true, true] },
         ],
         elements: [
           { id: '1', type: 'beam', nodes: ['1', '2'], material: '1', section: '1' },
+          { id: '2', type: 'beam', nodes: ['2', '3'], material: '1', section: '1' },
         ],
         materials: [
-          { id: '1', name: 'steel', E: 200000, nu: 0.3, rho: 7850 },
+          { id: '1', name: 'steel', E: 205000, nu: 0.3, rho: 7850 },
         ],
         sections: [
           { id: '1', name: 'B1', type: 'beam', properties: { A: 0.01, Iy: 0.0001 } },
         ],
         load_cases: [
-          { id: 'LC1', type: 'other', loads: [{ node: '2', fz: -load }] },
+          { id: 'LC1', type: 'other', loads: [{ node: '2', fy: -load }] },
         ],
-        load_combinations: [],
-        metadata: { source: 'text-draft', inferredType: 'beam' },
-      },
+        load_combinations: [{ id: 'ULS', factors: { LC1: 1.0 } }],
+        metadata,
+      };
+    }
+
+    if (state.inferredType === 'portal-frame') {
+      const span = state.spanLengthM!;
+      const height = state.heightM!;
+      const load = state.loadKN!;
+      return {
+        schema_version: '1.0.0',
+        unit_system: 'SI',
+        nodes: [
+          { id: '1', x: 0, y: 0, z: 0, restraints: [true, true, true, true, true, true] },
+          { id: '2', x: span, y: 0, z: 0, restraints: [true, true, true, true, true, true] },
+          { id: '3', x: 0, y: height, z: 0 },
+          { id: '4', x: span, y: height, z: 0 },
+        ],
+        elements: [
+          { id: '1', type: 'beam', nodes: ['1', '3'], material: '1', section: '1' },
+          { id: '2', type: 'beam', nodes: ['3', '4'], material: '1', section: '1' },
+          { id: '3', type: 'beam', nodes: ['4', '2'], material: '1', section: '1' },
+        ],
+        materials: [
+          { id: '1', name: 'steel', E: 205000, nu: 0.3, rho: 7850 },
+        ],
+        sections: [
+          { id: '1', name: 'PF1', type: 'beam', properties: { A: 0.02, Iy: 0.0002 } },
+        ],
+        load_cases: [
+          { id: 'LC1', type: 'other', loads: [{ node: '3', fy: -load / 2 }, { node: '4', fy: -load / 2 }] },
+        ],
+        load_combinations: [{ id: 'ULS', factors: { LC1: 1.0 } }],
+        metadata,
+      };
+    }
+
+    const length = state.lengthM!;
+    const load = state.loadKN!;
+    return {
+      schema_version: '1.0.0',
+      unit_system: 'SI',
+      nodes: [
+        { id: '1', x: 0, y: 0, z: 0, restraints: [true, true, true, true, true, true] },
+        { id: '2', x: length, y: 0, z: 0 },
+      ],
+      elements: [
+        { id: '1', type: 'beam', nodes: ['1', '2'], material: '1', section: '1' },
+      ],
+      materials: [
+        { id: '1', name: 'steel', E: 205000, nu: 0.3, rho: 7850 },
+      ],
+      sections: [
+        { id: '1', name: 'B1', type: 'beam', properties: { A: 0.01, Iy: 0.0001 } },
+      ],
+      load_cases: [
+        { id: 'LC1', type: 'other', loads: [{ node: '2', fy: -load }] },
+      ],
+      load_combinations: [{ id: 'ULS', factors: { LC1: 1.0 } }],
+      metadata,
     };
   }
 
-  private extractNumber(text: string, patterns: RegExp[]): number | null {
+  private async tryLlmExtract(message: string, existingState?: DraftState): Promise<DraftExtraction | null> {
+    if (!this.llm) {
+      return null;
+    }
+
+    const prior = existingState
+      ? JSON.stringify({
+          inferredType: existingState.inferredType,
+          lengthM: existingState.lengthM,
+          spanLengthM: existingState.spanLengthM,
+          heightM: existingState.heightM,
+          loadKN: existingState.loadKN,
+        })
+      : '{}';
+
+    const prompt = [
+      '你是结构建模参数提取器。',
+      '从用户输入里提取结构草模参数，仅返回 JSON，不要 markdown。',
+      '可选 inferredType: beam | truss | portal-frame | double-span-beam | unknown。',
+      '数值统一单位：m, kN。不存在的字段不要输出。',
+      `已有参数：${prior}`,
+      `用户输入：${message}`,
+      '输出示例：{"inferredType":"portal-frame","spanLengthM":6,"heightM":4,"loadKN":20}',
+    ].join('\n');
+
+    try {
+      const aiMessage = await this.llm.invoke(prompt);
+      const content = typeof aiMessage.content === 'string'
+        ? aiMessage.content
+        : JSON.stringify(aiMessage.content);
+      const parsed = this.parseJsonObject(content);
+      if (!parsed) {
+        return null;
+      }
+
+      return {
+        inferredType: this.normalizeInferredType(parsed.inferredType),
+        lengthM: this.normalizeNumber(parsed.lengthM),
+        spanLengthM: this.normalizeNumber(parsed.spanLengthM),
+        heightM: this.normalizeNumber(parsed.heightM),
+        loadKN: this.normalizeNumber(parsed.loadKN),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private extractDraftByRules(message: string): DraftExtraction {
+    const text = message.toLowerCase();
+
+    const inferredType = this.inferDraftType(text);
+    const spanLengthM = this.extractNumber(text, [
+      /每跨\s*(\d+(?:\.\d+)?)\s*(?:m|米)/i,
+      /双跨[^\d]*(\d+(?:\.\d+)?)\s*(?:m|米)/i,
+    ]);
+    const lengthM = this.extractNumber(text, [
+      /(跨度|跨长|长度|长)\s*(\d+(?:\.\d+)?)\s*(?:m|米)/i,
+      /(\d+(?:\.\d+)?)\s*(?:m|米)/i,
+    ], [2, 1]);
+    const heightM = this.extractNumber(text, [
+      /(柱高|高度|高)\s*(\d+(?:\.\d+)?)\s*(?:m|米)/i,
+    ], [2]);
+    const loadKN = this.extractNumber(text, [
+      /(\d+(?:\.\d+)?)\s*(?:kn|千牛)(?!\s*\/\s*m)/i,
+    ]);
+
+    return {
+      inferredType,
+      lengthM: lengthM ?? undefined,
+      spanLengthM: spanLengthM ?? undefined,
+      heightM: heightM ?? undefined,
+      loadKN: loadKN ?? undefined,
+    };
+  }
+
+  private inferDraftType(text: string): InferredModelType {
+    if (text.includes('门式刚架') || text.includes('portal frame')) {
+      return 'portal-frame';
+    }
+    if (text.includes('双跨梁') || text.includes('double-span')) {
+      return 'double-span-beam';
+    }
+    if (text.includes('桁架') || text.includes('truss')) {
+      return 'truss';
+    }
+    if (text.includes('梁') || text.includes('beam') || text.includes('悬臂')) {
+      return 'beam';
+    }
+    return 'unknown';
+  }
+
+  private normalizeInferredType(value: unknown): InferredModelType | undefined {
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+    if (value === 'beam' || value === 'truss' || value === 'portal-frame' || value === 'double-span-beam' || value === 'unknown') {
+      return value;
+    }
+    return undefined;
+  }
+
+  private normalizeNumber(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === 'string') {
+      const parsed = Number.parseFloat(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return undefined;
+  }
+
+  private parseJsonObject(content: string): Record<string, unknown> | null {
+    const trimmed = content.trim();
+    const direct = this.tryParseJson(trimmed);
+    if (direct) {
+      return direct;
+    }
+
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (fenced?.[1]) {
+      return this.tryParseJson(fenced[1]);
+    }
+
+    const first = trimmed.indexOf('{');
+    const last = trimmed.lastIndexOf('}');
+    if (first >= 0 && last > first) {
+      return this.tryParseJson(trimmed.slice(first, last + 1));
+    }
+    return null;
+  }
+
+  private tryParseJson(content: string): Record<string, unknown> | null {
+    try {
+      const parsed = JSON.parse(content);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private extractNumber(text: string, patterns: RegExp[], groupPriority: number[] = [1]): number | null {
     for (const pattern of patterns) {
       const match = text.match(pattern);
-      if (match && match[1]) {
-        const value = Number.parseFloat(match[1]);
+      if (!match) {
+        continue;
+      }
+      for (const groupIndex of groupPriority) {
+        const valueText = match[groupIndex];
+        if (!valueText) {
+          continue;
+        }
+        const value = Number.parseFloat(valueText);
         if (Number.isFinite(value)) {
           return value;
         }
       }
     }
     return null;
+  }
+
+  private startToolCall(tool: AgentToolName, input: Record<string, unknown>): AgentToolCall {
+    return {
+      tool,
+      input,
+      status: 'success',
+      startedAt: new Date().toISOString(),
+    };
+  }
+
+  private completeToolCallSuccess(call: AgentToolCall, output: unknown): void {
+    call.status = 'success';
+    call.output = output;
+    call.completedAt = new Date().toISOString();
+    call.durationMs = this.computeDurationMs(call.startedAt, call.completedAt);
+  }
+
+  private completeToolCallError(call: AgentToolCall, error: unknown): void {
+    call.status = 'error';
+    call.error = this.stringifyError(error);
+    call.errorCode = this.extractErrorCode(error);
+    call.completedAt = new Date().toISOString();
+    call.durationMs = this.computeDurationMs(call.startedAt, call.completedAt);
+  }
+
+  private computeDurationMs(startedAt: string, completedAt: string): number {
+    const start = Date.parse(startedAt);
+    const end = Date.parse(completedAt);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      return 0;
+    }
+    return Math.max(0, end - start);
+  }
+
+  private stringifyError(error: unknown): string {
+    const unknownError = error as any;
+    if (unknownError?.response?.data) {
+      return JSON.stringify(unknownError.response.data);
+    }
+    if (unknownError?.message) {
+      return String(unknownError.message);
+    }
+    return 'Unknown error';
+  }
+
+  private extractErrorCode(error: unknown): string | undefined {
+    const payload = (error as any)?.response?.data;
+    if (!payload || typeof payload !== 'object') {
+      return undefined;
+    }
+
+    const code = (payload.errorCode || payload.error_code) as unknown;
+    if (typeof code === 'string' && code.length > 0) {
+      return code;
+    }
+    return undefined;
+  }
+
+  private buildClarificationQuestion(missingFields: string[]): string {
+    return `请继续补充以下信息：${missingFields.join('、')}。我会沿用你前一轮已提供的参数继续建模。`;
+  }
+
+  private buildMetrics(toolCalls: AgentToolCall[]): { toolCount: number; failedToolCount: number } {
+    return {
+      toolCount: toolCalls.length,
+      failedToolCount: toolCalls.filter((call) => call.status === 'error').length,
+    };
+  }
+
+  private cleanupDraftStates(): void {
+    const now = Date.now();
+    for (const [key, state] of AgentService.draftStates.entries()) {
+      if (now - state.updatedAt > AgentService.draftStateTtlMs) {
+        AgentService.draftStates.delete(key);
+      }
+    }
+  }
+
+  private logRunResult(traceId: string, conversationId: string | undefined, result: AgentRunResult): void {
+    logger.info({
+      traceId,
+      conversationId,
+      success: result.success,
+      mode: result.mode,
+      durationMs: result.durationMs,
+      metrics: result.metrics,
+      toolCalls: result.toolCalls.map((call) => ({
+        tool: call.tool,
+        status: call.status,
+        durationMs: call.durationMs,
+        errorCode: call.errorCode,
+      })),
+    }, 'agent run completed');
   }
 }

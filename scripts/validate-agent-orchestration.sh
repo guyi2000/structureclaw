@@ -19,7 +19,7 @@ const run = async () => {
   // 0) protocol metadata
   {
     const protocol = AgentService.getProtocol();
-    assert(protocol.version === '1.0.0', 'protocol version should be 1.0.0');
+    assert(protocol.version === '1.1.0', 'protocol version should be 1.1.0');
     assert(Array.isArray(protocol.tools) && protocol.tools.length >= 3, 'protocol tools should be present');
     assert(protocol.runRequestSchema?.type === 'object', 'runRequestSchema should be json schema object');
     assert(protocol.runResultSchema?.type === 'object', 'runResultSchema should be json schema object');
@@ -103,29 +103,54 @@ const run = async () => {
     assert(result.success === true, 'successful orchestration should succeed');
     assert(result.toolCalls.some((c) => c.tool === 'validate'), 'validate should be called');
     assert(result.toolCalls.some((c) => c.tool === 'analyze'), 'analyze should be called');
+    assert(result.metrics?.toolCount >= 2, 'tool metrics should be present');
     console.log('[ok] agent success orchestration');
   }
 
   // 4) stream orchestration events
   {
     const svc = new AgentService();
-    svc.run = async () => ({
-      success: true,
-      mode: 'rule-based',
-      needsModelInput: false,
-      plan: [],
-      toolCalls: [],
-      response: 'ok',
-    });
+    svc.engineClient.post = async (path, payload) => {
+      if (path === '/validate') {
+        return { data: { valid: true, schemaVersion: '1.0.0' } };
+      }
+      if (path === '/analyze') {
+        return {
+          data: {
+            schema_version: '1.0.0',
+            analysis_type: payload.type,
+            success: true,
+            error_code: null,
+            message: 'ok',
+            data: {},
+            meta: {},
+          },
+        };
+      }
+      throw new Error(`unexpected path ${path}`);
+    };
 
     const events = [];
-    for await (const chunk of svc.runStream({ message: 'stream test', mode: 'execute' })) {
+    let streamTraceId;
+    let resultTraceId;
+    for await (const chunk of svc.runStream({
+      message: 'stream test',
+      mode: 'execute',
+      context: { model: { schema_version: '1.0.0' } },
+    })) {
       events.push(chunk.type);
+      if (chunk.type === 'start') {
+        streamTraceId = chunk.content.traceId;
+      }
+      if (chunk.type === 'result') {
+        resultTraceId = chunk.content.traceId;
+      }
     }
 
     assert(events[0] === 'start', 'stream first event should be start');
     assert(events.includes('result'), 'stream should include result event');
     assert(events[events.length - 1] === 'done', 'stream last event should be done');
+    assert(streamTraceId && resultTraceId && streamTraceId === resultTraceId, 'stream/result traceId should match');
     console.log('[ok] agent stream events');
   }
 
@@ -162,6 +187,86 @@ const run = async () => {
     assert(result.toolCalls.some((c) => c.tool === 'validate'), 'validate should be called after draft');
     assert(result.toolCalls.some((c) => c.tool === 'analyze'), 'analyze should be called after draft');
     console.log('[ok] agent text-to-model draft orchestration');
+  }
+
+  // 6) conversation-level clarification carry-over
+  {
+    const svc = new AgentService();
+    svc.engineClient.post = async (path, payload) => {
+      if (path === '/validate') {
+        return { data: { valid: true, schemaVersion: '1.0.0' } };
+      }
+      if (path === '/analyze') {
+        return {
+          data: {
+            schema_version: '1.0.0',
+            analysis_type: payload.type,
+            success: true,
+            error_code: null,
+            message: 'ok',
+            data: {},
+            meta: {},
+          },
+        };
+      }
+      throw new Error(`unexpected path ${path}`);
+    };
+
+    const first = await svc.run({
+      conversationId: 'conv-clarify-1',
+      message: '请帮我算一个门式刚架',
+      mode: 'execute',
+    });
+    assert(first.success === false, 'first turn should request clarification');
+    assert(first.needsModelInput === true, 'first turn should require model input');
+
+    const second = await svc.run({
+      conversationId: 'conv-clarify-1',
+      message: '跨度6m，柱高4m，竖向荷载20kN，做静力分析',
+      mode: 'execute',
+    });
+    assert(second.success === true, 'second turn should complete using persisted draft state');
+    assert(second.toolCalls.some((c) => c.tool === 'text-to-model-draft'), 'second turn should still draft model');
+    console.log('[ok] conversation-level clarification carry-over');
+  }
+
+  // 7) draft type coverage: double-span beam and planar truss
+  {
+    const svc = new AgentService();
+    svc.engineClient.post = async (path, payload) => {
+      if (path === '/validate') {
+        return { data: { valid: true, schemaVersion: '1.0.0' } };
+      }
+      if (path === '/analyze') {
+        return {
+          data: {
+            schema_version: '1.0.0',
+            analysis_type: payload.type,
+            success: true,
+            error_code: null,
+            message: 'ok',
+            data: {},
+            meta: {},
+          },
+        };
+      }
+      throw new Error(`unexpected path ${path}`);
+    };
+
+    const beam = await svc.run({
+      message: '按双跨梁建模，每跨4m，中跨节点施加12kN竖向荷载做静力分析',
+      mode: 'execute',
+    });
+    assert(beam.success === true, 'double-span beam draft should succeed');
+    assert(Array.isArray(beam.model?.elements) && beam.model.elements.length === 2, 'double-span beam should have 2 elements');
+
+    const truss = await svc.run({
+      message: '建立一个平面桁架，长度5m，10kN轴向荷载并计算',
+      mode: 'execute',
+    });
+    assert(truss.success === true, 'planar truss draft should succeed');
+    assert(Array.isArray(truss.model?.elements) && truss.model.elements[0]?.type === 'truss', 'truss draft should produce truss element');
+    console.log('[ok] draft type coverage');
   }
 };
 

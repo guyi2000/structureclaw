@@ -7,6 +7,7 @@ const agentService = new AgentService();
 const agentRunSchema = z.object({
   message: z.string().min(1).max(10000),
   mode: z.enum(['chat', 'execute', 'auto']).optional(),
+  conversationId: z.string().optional(),
   context: z.object({
     model: z.record(z.any()).optional(),
     modelFormat: z.string().optional(),
@@ -35,6 +36,7 @@ export async function agentRoutes(fastify: FastifyInstance) {
         required: ['message'],
         properties: {
           message: { type: 'string' },
+          conversationId: { type: 'string' },
           context: { type: 'object' },
         },
       },
