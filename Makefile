@@ -3,7 +3,7 @@ UV_CACHE_DIR ?= /tmp/uv-cache
 UV_PYTHON_INSTALL_DIR ?= /tmp/uv-python
 CORE_PYTHON_VERSION ?= 3.11
 
-.PHONY: help install setup-core-lite setup-core-full setup-core-lite-uv setup-core-full-uv dev-backend dev-frontend dev-core-lite dev-core-full build db-up db-down db-init docker-up docker-down local-up local-up-full local-up-uv local-up-full-uv local-up-noinfra local-down local-status health check-startup doctor start start-full stop status logs up
+.PHONY: help install setup-core-lite setup-core-full setup-core-lite-uv setup-core-full-uv dev-backend dev-frontend dev-core-lite dev-core-full build db-up db-down db-init docker-up docker-down local-up local-up-full local-up-uv local-up-full-uv local-up-noinfra local-down local-status health check-startup doctor start start-full stop status logs sclaw-install up
 
 help:
 	@echo "Available targets:"
@@ -37,6 +37,7 @@ help:
 	@echo "  stop            Beginner alias of local-down"
 	@echo "  status          Beginner alias of local-status"
 	@echo "  logs            Show logs (default: all services)"
+	@echo "  sclaw-install   Install global sclaw command to ~/.local/bin"
 	@echo "  up              Alias of docker-up"
 
 install:
@@ -135,5 +136,8 @@ status:
 
 logs:
 	./scripts/claw.sh logs
+
+sclaw-install:
+	./sclaw install
 
 up: docker-up

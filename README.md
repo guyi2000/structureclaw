@@ -76,17 +76,25 @@ make status
 - `make stop`: 停止本地服务和基础设施
 - `make logs`: 查看日志（默认 frontend/backend/core）
 
-### 命令入口（统一入口）
+### 命令入口（独立 CLI）
 
-除了 `make`，也可以直接使用统一命令入口：
+仓库根目录内可直接使用：
 
 ```bash
-./scripts/claw.sh help
-./scripts/claw.sh doctor
-./scripts/claw.sh start
-./scripts/claw.sh status
-./scripts/claw.sh logs all --follow
-./scripts/claw.sh stop
+./sclaw help
+./sclaw doctor
+./sclaw start
+./sclaw status
+./sclaw logs all --follow
+./sclaw stop
+```
+
+安装为全局命令（更像 openclaw）：
+
+```bash
+make sclaw-install
+sclaw version
+sclaw start
 ```
 
 ### 进阶场景
