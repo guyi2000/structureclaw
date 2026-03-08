@@ -21,7 +21,12 @@ const run = async () => {
     const protocol = AgentService.getProtocol();
     assert(protocol.version === '1.0.0', 'protocol version should be 1.0.0');
     assert(Array.isArray(protocol.tools) && protocol.tools.length >= 3, 'protocol tools should be present');
+    assert(protocol.runRequestSchema?.type === 'object', 'runRequestSchema should be json schema object');
+    assert(protocol.runResultSchema?.type === 'object', 'runResultSchema should be json schema object');
+    assert(Array.isArray(protocol.streamEventSchema?.oneOf), 'streamEventSchema should include oneOf');
     assert(protocol.tools.some((t) => t.name === 'analyze'), 'analyze tool spec should exist');
+    assert(protocol.tools.every((t) => t.outputSchema && typeof t.outputSchema === 'object'), 'tool outputSchema should exist');
+    assert(protocol.tools.every((t) => Array.isArray(t.errorCodes)), 'tool errorCodes should be array');
     console.log('[ok] agent protocol metadata');
   }
 

@@ -21,10 +21,15 @@ export interface AgentToolSpec {
   name: AgentToolName;
   description: string;
   inputSchema: Record<string, unknown>;
+  outputSchema: Record<string, unknown>;
+  errorCodes: string[];
 }
 
 export interface AgentProtocol {
   version: string;
+  runRequestSchema: Record<string, unknown>;
+  runResultSchema: Record<string, unknown>;
+  streamEventSchema: Record<string, unknown>;
   tools: AgentToolSpec[];
   errorCodes: string[];
 }
@@ -76,52 +81,173 @@ export class AgentService {
   }
 
   static getProtocol(): AgentProtocol {
+    const commonErrorCodes = [
+      'UNSUPPORTED_SOURCE_FORMAT',
+      'UNSUPPORTED_TARGET_FORMAT',
+      'INVALID_STRUCTURE_MODEL',
+      'INVALID_ANALYSIS_TYPE',
+      'ANALYSIS_EXECUTION_FAILED',
+      'AGENT_MISSING_MODEL_INPUT',
+    ];
+
     return {
       version: '1.0.0',
+      runRequestSchema: {
+        type: 'object',
+        required: ['message'],
+        properties: {
+          message: { type: 'string' },
+          mode: { enum: ['chat', 'execute', 'auto'] },
+          context: {
+            type: 'object',
+            properties: {
+              model: { type: 'object' },
+              modelFormat: { type: 'string' },
+              analysisType: { enum: ['static', 'dynamic', 'seismic', 'nonlinear'] },
+              parameters: { type: 'object' },
+              autoAnalyze: { type: 'boolean' },
+            },
+          },
+        },
+      },
+      runResultSchema: {
+        type: 'object',
+        required: ['success', 'mode', 'needsModelInput', 'plan', 'toolCalls', 'response'],
+        properties: {
+          success: { type: 'boolean' },
+          mode: { enum: ['rule-based', 'llm-assisted'] },
+          needsModelInput: { type: 'boolean' },
+          plan: { type: 'array', items: { type: 'string' } },
+          toolCalls: { type: 'array', items: { type: 'object' } },
+          model: { type: 'object' },
+          analysis: { type: 'object' },
+          response: { type: 'string' },
+        },
+      },
+      streamEventSchema: {
+        oneOf: [
+          {
+            type: 'object',
+            properties: {
+              type: { const: 'start' },
+              content: { type: 'object' },
+            },
+            required: ['type'],
+          },
+          {
+            type: 'object',
+            properties: {
+              type: { const: 'result' },
+              content: { type: 'object' },
+            },
+            required: ['type', 'content'],
+          },
+          {
+            type: 'object',
+            properties: { type: { const: 'done' } },
+            required: ['type'],
+          },
+          {
+            type: 'object',
+            properties: {
+              type: { const: 'error' },
+              error: { type: 'string' },
+            },
+            required: ['type', 'error'],
+          },
+        ],
+      },
       tools: [
         {
           name: 'convert',
           description: '模型格式转换，统一转为 structuremodel-v1 或导出到目标格式',
           inputSchema: {
-            model: 'object',
-            source_format: 'string',
-            target_format: 'string',
-            target_schema_version: 'string',
+            type: 'object',
+            required: ['model'],
+            properties: {
+              model: { type: 'object' },
+              source_format: { type: 'string' },
+              target_format: { type: 'string' },
+              target_schema_version: { type: 'string' },
+            },
           },
+          outputSchema: {
+            type: 'object',
+            properties: {
+              sourceFormat: { type: 'string' },
+              targetFormat: { type: 'string' },
+              sourceSchemaVersion: { type: 'string' },
+              targetSchemaVersion: { type: 'string' },
+              model: { type: 'object' },
+            },
+          },
+          errorCodes: ['UNSUPPORTED_SOURCE_FORMAT', 'UNSUPPORTED_TARGET_FORMAT', 'INVALID_STRUCTURE_MODEL'],
         },
         {
           name: 'validate',
           description: '校验结构模型字段合法性与引用完整性',
           inputSchema: {
-            model: 'object',
+            type: 'object',
+            required: ['model'],
+            properties: {
+              model: { type: 'object' },
+            },
           },
+          outputSchema: {
+            type: 'object',
+            properties: {
+              valid: { type: 'boolean' },
+              schemaVersion: { type: 'string' },
+              stats: { type: 'object' },
+            },
+          },
+          errorCodes: ['INVALID_STRUCTURE_MODEL'],
         },
         {
           name: 'analyze',
           description: '执行结构分析（static/dynamic/seismic/nonlinear）',
           inputSchema: {
-            type: 'string',
-            model: 'object',
-            parameters: 'object',
+            type: 'object',
+            required: ['type', 'model', 'parameters'],
+            properties: {
+              type: { enum: ['static', 'dynamic', 'seismic', 'nonlinear'] },
+              model: { type: 'object' },
+              parameters: { type: 'object' },
+            },
           },
+          outputSchema: {
+            type: 'object',
+            properties: {
+              schema_version: { type: 'string' },
+              analysis_type: { type: 'string' },
+              success: { type: 'boolean' },
+              error_code: { type: ['string', 'null'] },
+              message: { type: 'string' },
+              data: { type: 'object' },
+              meta: { type: 'object' },
+            },
+          },
+          errorCodes: ['INVALID_ANALYSIS_TYPE', 'ANALYSIS_EXECUTION_FAILED'],
         },
         {
           name: 'code-check',
           description: '结构规范校核（预留）',
           inputSchema: {
-            modelId: 'string',
-            code: 'string',
-            elements: 'string[]',
+            type: 'object',
+            required: ['modelId', 'code', 'elements'],
+            properties: {
+              modelId: { type: 'string' },
+              code: { type: 'string' },
+              elements: { type: 'array', items: { type: 'string' } },
+            },
           },
+          outputSchema: {
+            type: 'object',
+          },
+          errorCodes: [],
         },
       ],
-      errorCodes: [
-        'UNSUPPORTED_SOURCE_FORMAT',
-        'UNSUPPORTED_TARGET_FORMAT',
-        'INVALID_STRUCTURE_MODEL',
-        'INVALID_ANALYSIS_TYPE',
-        'ANALYSIS_EXECUTION_FAILED',
-      ],
+      errorCodes: commonErrorCodes,
     };
   }
 
