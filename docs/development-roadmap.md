@@ -42,6 +42,7 @@
   - 支持自然语言请求 + 工具链执行轨迹返回
   - 当前工具链：`text-to-model-draft -> convert -> validate -> analyze -> code-check -> report`
   - 无模型输入时先执行文本草模；信息不足则返回结构化缺参提示
+  - 报告支持落盘导出：`context.reportOutput=file`（输出到 `uploads/reports`）
 - Chat 已复用 Agent 执行入口：`POST /api/v1/chat/execute`
 - `POST /api/v1/chat/message` 新增 `mode` 开关：`chat/execute/auto`
 - `POST /api/v1/chat/stream` 已支持 `mode`，可流式返回 Agent 执行事件

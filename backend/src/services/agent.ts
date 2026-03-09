@@ -1,6 +1,8 @@
 import axios, { AxiosInstance } from 'axios';
 import { ChatOpenAI } from '@langchain/openai';
 import { randomUUID } from 'crypto';
+import { mkdir, writeFile } from 'fs/promises';
+import path from 'path';
 import { config } from '../config/index.js';
 import { createChatModel } from '../utils/llm.js';
 import { logger } from '../utils/logger.js';
@@ -9,6 +11,7 @@ import { redis } from '../utils/redis.js';
 export type AgentToolName = 'text-to-model-draft' | 'convert' | 'validate' | 'analyze' | 'code-check' | 'report';
 export type AgentRunMode = 'chat' | 'execute' | 'auto';
 export type AgentReportFormat = 'json' | 'markdown' | 'both';
+export type AgentReportOutput = 'inline' | 'file';
 
 type InferredModelType = 'beam' | 'truss' | 'portal-frame' | 'double-span-beam' | 'unknown';
 
@@ -53,6 +56,7 @@ export interface AgentRunParams {
     codeCheckElements?: string[];
     includeReport?: boolean;
     reportFormat?: AgentReportFormat;
+    reportOutput?: AgentReportOutput;
   };
 }
 
@@ -101,6 +105,11 @@ export interface AgentRunResult {
     json: Record<string, unknown>;
     markdown?: string;
   };
+  artifacts?: Array<{
+    type: 'report';
+    format: 'json' | 'markdown';
+    path: string;
+  }>;
   metrics?: {
     toolCount: number;
     failedToolCount: number;
@@ -164,6 +173,7 @@ export class AgentService {
               codeCheckElements: { type: 'array', items: { type: 'string' } },
               includeReport: { type: 'boolean' },
               reportFormat: { enum: ['json', 'markdown', 'both'] },
+              reportOutput: { enum: ['inline', 'file'] },
             },
           },
         },
@@ -190,6 +200,7 @@ export class AgentService {
               markdown: { type: 'string' },
             },
           },
+          artifacts: { type: 'array', items: { type: 'object' } },
           metrics: {
             type: 'object',
             properties: {
@@ -431,6 +442,7 @@ export class AgentService {
     const designCode = params.context?.designCode || 'GB50017';
     const includeReport = params.context?.includeReport ?? true;
     const reportFormat = params.context?.reportFormat || 'both';
+    const reportOutput = params.context?.reportOutput || 'inline';
     const analysisType = params.context?.analysisType || this.inferAnalysisType(params.message);
     const analysisParameters = params.context?.parameters || {};
 
@@ -648,6 +660,7 @@ export class AgentService {
       }
 
       let report: AgentRunResult['report'];
+      let artifacts: AgentRunResult['artifacts'];
       if (analysisSuccess && includeReport) {
         plan.push('生成可读计算与校核报告');
         const reportCall = this.startToolCall('report', {
@@ -664,6 +677,9 @@ export class AgentService {
           codeCheck: codeCheckResult,
           format: reportFormat,
         });
+        if (report && reportOutput === 'file') {
+          artifacts = await this.persistReportArtifacts(traceId, report, reportFormat);
+        }
         this.completeToolCallSuccess(reportCall, report);
       }
 
@@ -685,6 +701,7 @@ export class AgentService {
         analysis: analyzed.data,
         codeCheck: codeCheckResult,
         report,
+        artifacts,
         metrics: this.buildMetrics(toolCalls),
         response,
       };
@@ -810,6 +827,36 @@ export class AgentService {
       return raw as Record<string, unknown>;
     }
     return {};
+  }
+
+  private async persistReportArtifacts(
+    traceId: string,
+    report: NonNullable<AgentRunResult['report']>,
+    format: AgentReportFormat,
+  ): Promise<NonNullable<AgentRunResult['artifacts']>> {
+    const reportDir = path.resolve(config.uploadDir, 'reports');
+    await mkdir(reportDir, { recursive: true });
+
+    const artifacts: NonNullable<AgentRunResult['artifacts']> = [];
+    if (format === 'json' || format === 'both') {
+      const jsonPath = path.join(reportDir, `${traceId}.json`);
+      await writeFile(jsonPath, JSON.stringify(report.json, null, 2), 'utf-8');
+      artifacts.push({
+        type: 'report',
+        format: 'json',
+        path: jsonPath,
+      });
+    }
+    if ((format === 'markdown' || format === 'both') && report.markdown) {
+      const mdPath = path.join(reportDir, `${traceId}.md`);
+      await writeFile(mdPath, report.markdown, 'utf-8');
+      artifacts.push({
+        type: 'report',
+        format: 'markdown',
+        path: mdPath,
+      });
+    }
+    return artifacts;
   }
 
   private async renderSummary(message: string, fallback: string): Promise<string> {

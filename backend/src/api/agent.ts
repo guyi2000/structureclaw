@@ -19,6 +19,7 @@ const agentRunSchema = z.object({
     codeCheckElements: z.array(z.string()).optional(),
     includeReport: z.boolean().optional(),
     reportFormat: z.enum(['json', 'markdown', 'both']).optional(),
+    reportOutput: z.enum(['inline', 'file']).optional(),
   }).optional(),
 });
 

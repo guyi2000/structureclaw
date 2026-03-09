@@ -23,6 +23,7 @@ const sendMessageSchema = z.object({
     codeCheckElements: z.array(z.string()).optional(),
     includeReport: z.boolean().optional(),
     reportFormat: z.enum(['json', 'markdown', 'both']).optional(),
+    reportOutput: z.enum(['inline', 'file']).optional(),
   }).optional(),
 });
 
@@ -45,6 +46,7 @@ const executeSchema = z.object({
     codeCheckElements: z.array(z.string()).optional(),
     includeReport: z.boolean().optional(),
     reportFormat: z.enum(['json', 'markdown', 'both']).optional(),
+    reportOutput: z.enum(['inline', 'file']).optional(),
   }).optional(),
 });
 
@@ -64,6 +66,7 @@ const streamMessageSchema = z.object({
     codeCheckElements: z.array(z.string()).optional(),
     includeReport: z.boolean().optional(),
     reportFormat: z.enum(['json', 'markdown', 'both']).optional(),
+    reportOutput: z.enum(['inline', 'file']).optional(),
   }).optional(),
 });
 
@@ -107,6 +110,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
           codeCheckElements: body.context?.codeCheckElements,
           includeReport: body.context?.includeReport,
           reportFormat: body.context?.reportFormat,
+          reportOutput: body.context?.reportOutput,
         },
       });
       return reply.send({
@@ -207,6 +211,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
           codeCheckElements: body.context?.codeCheckElements,
           includeReport: body.context?.includeReport,
           reportFormat: body.context?.reportFormat,
+          reportOutput: body.context?.reportOutput,
         },
       });
 

@@ -14,6 +14,7 @@ const assert = (cond, msg) => {
 };
 
 const run = async () => {
+  const fs = await import('node:fs');
   const { AgentService } = await import('./backend/dist/services/agent.js');
 
   // 0) protocol metadata
@@ -346,6 +347,7 @@ const run = async () => {
         },
         includeReport: true,
         reportFormat: 'both',
+        reportOutput: 'file',
       },
     });
 
@@ -357,6 +359,11 @@ const run = async () => {
     assert(capturedCodeCheckPayload?.context?.utilizationByElement?.E1?.['正应力'] === 0.72, 'utilization context should be forwarded');
     assert(result.codeCheck?.details?.[0]?.checks?.[0]?.items?.[0]?.clause, 'code-check should include traceable clause');
     assert(typeof result.report?.markdown === 'string', 'markdown report should be generated');
+    assert(Array.isArray(result.artifacts) && result.artifacts.length >= 1, 'report artifacts should be generated');
+    assert(result.artifacts.every((a) => fs.existsSync(a.path)), 'report artifact files should exist');
+    for (const artifact of result.artifacts) {
+      fs.unlinkSync(artifact.path);
+    }
     console.log('[ok] analyze code-check report closed loop');
   }
 };

@@ -267,6 +267,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 - `POST /api/v1/chat/stream` (`mode=chat|execute|auto`)
 - `agent/run` 已支持最小文本草模（梁/双跨梁/平面桁架/门式刚架）与会话级缺参澄清补数
 - `agent/run` 已支持 `analyze -> code-check -> report` 闭环（可按上下文开关）
+- `agent/run` 报告支持 `reportOutput=file` 落盘至 `uploads/reports/`
 - `GET /api/v1/users/*`
 - `GET /api/v1/projects/*`
 - `GET /api/v1/skills/*`
