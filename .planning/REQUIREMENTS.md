@@ -41,7 +41,7 @@ Frontend rewrite requirements, all implemented in v1.
 
 ### Pages
 
-- [ ] **PAGE-01**: Home page rewrite (product showcase + quick entry)
+- [x] **PAGE-01**: Home page rewrite (product showcase + quick entry)
 - [ ] **PAGE-02**: Console page rewrite
 
 ### Console
@@ -153,7 +153,7 @@ Which phase covers which requirement. Updated during roadmap creation.
 | CONS-15 | Phase 5 | Complete |
 | CONS-16 | Phase 5 | Complete |
 | CONS-17 | Phase 5 | Complete |
-| PAGE-01 | Phase 6 | Pending |
+| PAGE-01 | Phase 6 | Complete |
 | PAGE-02 | Phase 6 | Pending |
 | ACCS-01 | Phase 6 | Pending |
 | ACCS-02 | Phase 6 | Pending |
