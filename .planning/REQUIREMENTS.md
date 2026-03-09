@@ -1,111 +1,111 @@
 # Requirements: StructureClaw Frontend
 
 **Defined:** 2026-03-09
-**Core Value:** 美观、专业、易用的结构工程 AI 工作台
+**Core Value:** Beautiful, professional, easy-to-use structural engineering AI workbench
 
 ## v1 Requirements
 
-前端重写需求，全部功能在 v1 实现。
+Frontend rewrite requirements, all implemented in v1.
 
 ### Design System
 
-- [ ] **DSGN-01**: 建立设计令牌（颜色、字体、间距、圆角、阴影）
-- [ ] **DSGN-02**: 配置 Geist 字体（Sans + Mono）
-- [ ] **DSGN-03**: Tailwind 自定义配置（扩展主题）
-- [ ] **DSGN-04**: `cn()` 工具函数（clsx + tailwind-merge）
-- [ ] **DSGN-05**: 深色/浅色/System 三态主题切换
-- [ ] **DSGN-06**: 自定义主题强调色
-- [ ] **DSGN-07**: 玻璃态效果（glassmorphism）组件变体
+- [ ] **DSGN-01**: Establish design tokens (colors, fonts, spacing, border-radius, shadows)
+- [ ] **DSGN-02**: Configure Geist font (Sans + Mono)
+- [ ] **DSGN-03**: Tailwind custom configuration (extend theme)
+- [ ] **DSGN-04**: `cn()` utility function (clsx + tailwind-merge)
+- [ ] **DSGN-05**: Dark/Light/System tri-state theme switching
+- [ ] **DSGN-06**: Custom theme accent color
+- [ ] **DSGN-07**: Glassmorphism effect component variants
 
 ### Components
 
-- [ ] **COMP-01**: Button 组件（多尺寸、多变体）
-- [ ] **COMP-02**: Card 组件
-- [ ] **COMP-03**: Input 组件
-- [ ] **COMP-04**: Textarea 组件
-- [ ] **COMP-05**: Select 组件
-- [ ] **COMP-06**: Dialog/Modal 组件
-- [ ] **COMP-07**: Toast 通知组件（Sonner）
-- [ ] **COMP-08**: Skeleton 加载组件
-- [ ] **COMP-09**: Badge 组件
-- [ ] **COMP-10**: Command Palette（Cmd/Ctrl+K）
-- [ ] **COMP-11**: 微交互动画（hover、click、transition）
+- [ ] **COMP-01**: Button component (multiple sizes, multiple variants)
+- [ ] **COMP-02**: Card component
+- [ ] **COMP-03**: Input component
+- [ ] **COMP-04**: Textarea component
+- [ ] **COMP-05**: Select component
+- [ ] **COMP-06**: Dialog/Modal component
+- [ ] **COMP-07**: Toast notification component (Sonner)
+- [ ] **COMP-08**: Skeleton loading component
+- [ ] **COMP-09**: Badge component
+- [ ] **COMP-10**: Command Palette (Cmd/Ctrl+K)
+- [ ] **COMP-11**: Micro-interaction animations (hover, click, transition)
 
 ### Layout
 
-- [ ] **LAYT-01**: 响应式侧边栏导航
-- [ ] **LAYT-02**: 顶部状态栏
-- [ ] **LAYT-03**: 路由分组（marketing/console）
-- [ ] **LAYT-04**: 根布局 Provider 封装
-- [ ] **LAYT-05**: 可拖拽分屏面板布局
+- [ ] **LAYT-01**: Responsive sidebar navigation
+- [ ] **LAYT-02**: Top status bar
+- [ ] **LAYT-03**: Route grouping (marketing/console)
+- [ ] **LAYT-04**: Root layout Provider wrapping
+- [ ] **LAYT-05**: Draggable split panel layout
 
 ### Pages
 
-- [ ] **PAGE-01**: 首页重写（产品展示 + 快速入口）
-- [ ] **PAGE-02**: 控制台页面重写
+- [ ] **PAGE-01**: Home page rewrite (product showcase + quick entry)
+- [ ] **PAGE-02**: Console page rewrite
 
 ### Console
 
-- [ ] **CONS-01**: 端点选择 UI（agent-run, chat-message, chat-execute）
-- [ ] **CONS-02**: Mode 选择 UI（chat, execute, auto）
-- [ ] **CONS-03**: 消息输入区域
-- [ ] **CONS-04**: 模型 JSON 输入区域（可折叠）
-- [ ] **CONS-05**: 配置选项面板（analysisType, reportFormat, reportOutput）
-- [ ] **CONS-06**: 复选框组（includeModel, autoAnalyze, autoCodeCheck, includeReport）
-- [ ] **CONS-07**: 执行按钮（同步 + SSE 流式）
-- [ ] **CONS-08**: 执行结果展示（traceId, status, response）
-- [ ] **CONS-09**: 指标展示（toolCount, durationMs 等）
-- [ ] **CONS-10**: 工具调用时间线（执行顺序、状态、耗时）
-- [ ] **CONS-11**: Artifacts 列表展示
-- [ ] **CONS-12**: SSE 流式执行支持
-- [ ] **CONS-13**: 流状态指示器（连接中、接收中、完成）
-- [ ] **CONS-14**: 调试输出面板（Raw JSON + Stream Frames）
-- [ ] **CONS-15**: 错误状态展示
-- [ ] **CONS-16**: 澄清问题展示（缺参提示）
-- [ ] **CONS-17**: 报告摘要展示
+- [ ] **CONS-01**: Endpoint selection UI (agent-run, chat-message, chat-execute)
+- [ ] **CONS-02**: Mode selection UI (chat, execute, auto)
+- [ ] **CONS-03**: Message input area
+- [ ] **CONS-04**: Model JSON input area (collapsible)
+- [ ] **CONS-05**: Configuration options panel (analysisType, reportFormat, reportOutput)
+- [ ] **CONS-06**: Checkbox group (includeModel, autoAnalyze, autoCodeCheck, includeReport)
+- [ ] **CONS-07**: Execute button (sync + SSE streaming)
+- [ ] **CONS-08**: Execution result display (traceId, status, response)
+- [ ] **CONS-09**: Metrics display (toolCount, durationMs, etc.)
+- [ ] **CONS-10**: Tool call timeline (execution order, status, duration)
+- [ ] **CONS-11**: Artifacts list display
+- [ ] **CONS-12**: SSE streaming execution support
+- [ ] **CONS-13**: Flow state indicator (connecting, receiving, complete)
+- [ ] **CONS-14**: Debug output panel (Raw JSON + Stream Frames)
+- [ ] **CONS-15**: Error state display
+- [ ] **CONS-16**: Clarification question display (missing parameter prompt)
+- [ ] **CONS-17**: Report summary display
 
 ### State & Data
 
-- [ ] **STAT-01**: Zustand store 工厂模式（SSR 兼容）
-- [ ] **STAT-02**: API 客户端层（fetch 封装）
-- [ ] **STAT-03**: SSE 流式 hook
-- [ ] **STAT-04**: 主题状态管理
+- [ ] **STAT-01**: Zustand store factory pattern (SSR compatible)
+- [ ] **STAT-02**: API client layer (fetch wrapper)
+- [ ] **STAT-03**: SSE streaming hook
+- [ ] **STAT-04**: Theme state management
 
 ### Accessibility
 
-- [ ] **ACCS-01**: 键盘导航支持（Tab、Enter、Escape）
-- [ ] **ACCS-02**: Focus 管理
-- [ ] **ACCS-03**: 语义化 HTML
-- [ ] **ACCS-04**: ARIA 标签
+- [ ] **ACCS-01**: Keyboard navigation support (Tab, Enter, Escape)
+- [ ] **ACCS-02**: Focus management
+- [ ] **ACCS-03**: Semantic HTML
+- [ ] **ACCS-04**: ARIA labels
 
 ## v2 Requirements
 
-后续版本考虑的功能。
+Features for future versions.
 
 ### Advanced Features
 
-- **ADV-01**: 国际化 (i18n)
-- **ADV-02**: 结果可视化图表（位移图、内力图）
-- **ADV-03**: 模型 3D 预览
-- **ADV-04**: 历史记录管理
-- **ADV-05**: 用户设置持久化
+- **ADV-01**: Internationalization (i18n)
+- **ADV-02**: Result visualization charts (displacement diagram, internal force diagram)
+- **ADV-03**: Model 3D preview
+- **ADV-04**: History management
+- **ADV-05**: User settings persistence
 
 ## Out of Scope
 
-明确排除的功能，防止范围蔓延。
+Explicitly excluded features to prevent scope creep.
 
 | Feature | Reason |
 |---------|--------|
-| 后端 API 改动 | 前端重写不涉及后端 |
-| Core 分析引擎改动 | 前端重写不涉及分析引擎 |
-| 移动端 App | 本轮只做 Web 响应式 |
-| 国际化 (i18n) | 暂时保持中文 |
-| 用户认证系统 | 使用现有后端认证 |
-| 数据库改动 | 使用现有后端数据层 |
+| Backend API changes | Frontend rewrite does not involve backend |
+| Core analysis engine changes | Frontend rewrite does not involve analysis engine |
+| Mobile App | This round only does Web responsive |
+| Internationalization (i18n) | Keep Chinese for now |
+| User authentication system | Use existing backend authentication |
+| Database changes | Use existing backend data layer |
 
 ## Traceability
 
-哪个阶段覆盖哪个需求。在 roadmap 创建时更新。
+Which phase covers which requirement. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
@@ -136,8 +136,6 @@
 | STAT-02 | Phase 4 | Pending |
 | STAT-03 | Phase 4 | Pending |
 | STAT-04 | Phase 4 | Pending |
-| PAGE-01 | Phase 5 | Pending |
-| PAGE-02 | Phase 5 | Pending |
 | CONS-01 | Phase 5 | Pending |
 | CONS-02 | Phase 5 | Pending |
 | CONS-03 | Phase 5 | Pending |
@@ -155,6 +153,8 @@
 | CONS-15 | Phase 5 | Pending |
 | CONS-16 | Phase 5 | Pending |
 | CONS-17 | Phase 5 | Pending |
+| PAGE-01 | Phase 6 | Pending |
+| PAGE-02 | Phase 6 | Pending |
 | ACCS-01 | Phase 6 | Pending |
 | ACCS-02 | Phase 6 | Pending |
 | ACCS-03 | Phase 6 | Pending |
@@ -163,8 +163,8 @@
 **Coverage:**
 - v1 requirements: 47 total
 - Mapped to phases: 47
-- Unmapped: 0 ✓
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-09*
-*Last updated: 2026-03-09 after initial definition*
+*Last updated: 2026-03-09 after roadmap creation*
