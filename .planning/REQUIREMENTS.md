@@ -53,16 +53,16 @@ Frontend rewrite requirements, all implemented in v1.
 - [x] **CONS-05**: Configuration options panel (analysisType, reportFormat, reportOutput)
 - [x] **CONS-06**: Checkbox group (includeModel, autoAnalyze, autoCodeCheck, includeReport)
 - [x] **CONS-07**: Execute button (sync + SSE streaming)
-- [ ] **CONS-08**: Execution result display (traceId, status, response)
-- [ ] **CONS-09**: Metrics display (toolCount, durationMs, etc.)
-- [ ] **CONS-10**: Tool call timeline (execution order, status, duration)
-- [ ] **CONS-11**: Artifacts list display
+- [x] **CONS-08**: Execution result display (traceId, status, response)
+- [x] **CONS-09**: Metrics display (toolCount, durationMs, etc.)
+- [x] **CONS-10**: Tool call timeline (execution order, status, duration)
+- [x] **CONS-11**: Artifacts list display
 - [x] **CONS-12**: SSE streaming execution support
 - [x] **CONS-13**: Flow state indicator (connecting, receiving, complete)
-- [ ] **CONS-14**: Debug output panel (Raw JSON + Stream Frames)
-- [ ] **CONS-15**: Error state display
-- [ ] **CONS-16**: Clarification question display (missing parameter prompt)
-- [ ] **CONS-17**: Report summary display
+- [x] **CONS-14**: Debug output panel (Raw JSON + Stream Frames)
+- [x] **CONS-15**: Error state display
+- [x] **CONS-16**: Clarification question display (missing parameter prompt)
+- [x] **CONS-17**: Report summary display
 
 ### State & Data
 
@@ -143,16 +143,16 @@ Which phase covers which requirement. Updated during roadmap creation.
 | CONS-05 | Phase 5 | Complete |
 | CONS-06 | Phase 5 | Complete |
 | CONS-07 | Phase 5 | Complete |
-| CONS-08 | Phase 5 | Pending |
-| CONS-09 | Phase 5 | Pending |
-| CONS-10 | Phase 5 | Pending |
-| CONS-11 | Phase 5 | Pending |
+| CONS-08 | Phase 5 | Complete |
+| CONS-09 | Phase 5 | Complete |
+| CONS-10 | Phase 5 | Complete |
+| CONS-11 | Phase 5 | Complete |
 | CONS-12 | Phase 5 | Complete |
 | CONS-13 | Phase 5 | Complete |
-| CONS-14 | Phase 5 | Pending |
-| CONS-15 | Phase 5 | Pending |
-| CONS-16 | Phase 5 | Pending |
-| CONS-17 | Phase 5 | Pending |
+| CONS-14 | Phase 5 | Complete |
+| CONS-15 | Phase 5 | Complete |
+| CONS-16 | Phase 5 | Complete |
+| CONS-17 | Phase 5 | Complete |
 | PAGE-01 | Phase 6 | Pending |
 | PAGE-02 | Phase 6 | Pending |
 | ACCS-01 | Phase 6 | Pending |
