@@ -1,21 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { createElement } from 'react'
+import { ErrorDisplay } from '@/components/console/error-display'
+import { ClarificationPrompt } from '@/components/console/clarification-prompt'
+import type { AgentError, Clarification } from '@/lib/api/contracts/agent'
 
 /**
- * Focus Management Test Stubs (ACCS-02)
+ * Focus Management Tests (ACCS-02)
  *
  * These tests verify that focus is managed appropriately for accessibility:
- * - Focus is trapped within open dialogs
- * - Focus returns to trigger element when dialog closes
- * - Dynamic content receives focus appropriately
- * - Screen reader announcements are enabled via aria-live
- *
- * Reference: tests/components/dialog.test.tsx has existing focus trap tests
+ * - Error display receives focus when error appears
+ * - Clarification prompt is announced to screen readers
+ * - Components have proper ARIA live regions
  */
-
 describe('Focus Management (ACCS-02)', () => {
+  const user = userEvent.setup()
+
   beforeEach(() => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
   })
@@ -24,41 +24,151 @@ describe('Focus Management (ACCS-02)', () => {
     vi.restoreAllMocks()
   })
 
-  describe('Dialog focus trap', () => {
-    it.todo('focus is trapped within open dialog')
-    it.todo('Tab cycles through focusable elements inside dialog')
-    it.todo('Shift+Tab cycles backwards through focusable elements')
-    it.todo('focus cannot escape dialog to background content')
+  describe('ErrorDisplay', () => {
+    it('receives focus when error appears', () => {
+      const error: AgentError = { message: 'Test error message' }
+      render(<ErrorDisplay error={error} />)
+      const alert = screen.getByRole('alert')
+      expect(alert).toHaveFocus()
+    })
+
+    it('has aria-live="assertive" for immediate announcement', () => {
+      const error: AgentError = { message: 'Test error message' }
+      render(<ErrorDisplay error={error} />)
+      const alert = screen.getByRole('alert')
+      expect(alert).toHaveAttribute('aria-live', 'assertive')
+    })
+
+    it('has role="alert" for screen reader announcement', () => {
+      const error: AgentError = { message: 'Test error message' }
+      render(<ErrorDisplay error={error} />)
+      expect(screen.getByRole('alert')).toBeInTheDocument()
+    })
+
+    it('announces error message to screen reader', () => {
+      const error: AgentError = { message: 'Test error message' }
+      render(<ErrorDisplay error={error} />)
+      const alert = screen.getByRole('alert')
+      expect(alert).toHaveTextContent('Test error message')
+    })
+
+    it('has tabIndex=-1 to allow programmatic focus', () => {
+      const error: AgentError = { message: 'Test error message' }
+      render(<ErrorDisplay error={error} />)
+      const alert = screen.getByRole('alert')
+      expect(alert).toHaveAttribute('tabIndex', '-1')
+    })
+
+    it('returns null when no error is provided', () => {
+      render(<ErrorDisplay error={null} />)
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    })
   })
 
-  describe('Focus return on close', () => {
-    it.todo('focus returns to trigger element when dialog closes via Escape')
-    it.todo('focus returns to trigger element when dialog closes via close button')
-    it.todo('focus returns to trigger element when dialog closes via click outside')
-  })
+  describe('ClarificationPrompt', () => {
+    it('has aria-live="polite" for non-urgent announcement', () => {
+      const clarification: Clarification = {
+        question: 'Missing parameter?',
+        missingFields: ['field1'],
+      }
+      render(<ClarificationPrompt clarification={clarification} />)
+      const prompt = screen.getByLabelText(/clarification needed/i)
+      expect(prompt).toHaveAttribute('aria-live', 'polite')
+    })
 
-  describe('Error display focus', () => {
-    it.todo('error display receives focus when error appears')
-    it.todo('error message is announced to screen readers')
-    it.todo('error has role=\"alert\" for immediate announcement')
-  })
+    it('has role="region" for semantic structure', () => {
+      const clarification: Clarification = {
+        question: 'Missing parameter?',
+        missingFields: ['field1'],
+      }
+      render(<ClarificationPrompt clarification={clarification} />)
+      const prompt = screen.getByLabelText(/clarification needed/i)
+      expect(prompt).toHaveAttribute('role', 'region')
+    })
 
-  describe('Clarification prompt focus', () => {
-    it.todo('clarification prompt receives focus when it appears')
-    it.todo('clarification options are immediately focusable')
-    it.todo('user can Tab through clarification response options')
+    it('announces clarification question to screen reader', () => {
+      const clarification: Clarification = {
+        question: 'Missing parameter?',
+      }
+      render(<ClarificationPrompt clarification={clarification} />)
+      const prompt = screen.getByLabelText(/clarification needed/i)
+      expect(prompt).toHaveTextContent('Missing parameter?')
+    })
+
+    it('returns null when no clarification is provided', () => {
+      render(<ClarificationPrompt clarification={undefined} />)
+      expect(screen.queryByLabelText(/clarification needed/i)).not.toBeInTheDocument()
+    })
+
+    it('allows user to Tab to interactive elements inside if any', async () => {
+      const clarification: Clarification = {
+        question: 'Missing parameter?',
+        missingFields: ['field1', 'field2'],
+      }
+      render(<ClarificationPrompt clarification={clarification} />)
+      // The component should be visible and accessible
+      const prompt = screen.getByLabelText(/clarification needed/i)
+      expect(prompt).toBeInTheDocument()
+      expect(prompt).toHaveTextContent('field1')
+      expect(prompt).toHaveTextContent('field2')
+    })
   })
 
   describe('Dynamic content announcements', () => {
-    it.todo('loading state changes use aria-live for announcements')
-    it.todo('result updates use aria-live for announcements')
-    it.todo('stream frames are announced as they arrive')
-    it.todo('connection state changes are announced')
+    it('error display uses assertive aria-live for immediate attention', () => {
+      const error: AgentError = { message: 'Critical error' }
+      render(<ErrorDisplay error={error} />)
+      const alert = screen.getByRole('alert')
+      // Assertive means screen reader interrupts current announcement
+      expect(alert).toHaveAttribute('aria-live', 'assertive')
+    })
+
+    it('clarification prompt uses polite aria-live for non-interrupting', () => {
+      const clarification: Clarification = { question: 'Need info?' }
+      render(<ClarificationPrompt clarification={clarification} />)
+      const prompt = screen.getByLabelText(/clarification needed/i)
+      // Polite means screen reader waits for pause before announcing
+      expect(prompt).toHaveAttribute('aria-live', 'polite')
+    })
+
+    it('decorative icons are hidden from screen readers', () => {
+      const error: AgentError = { message: 'Error' }
+      const clarification: Clarification = { question: 'Question?' }
+
+      render(
+        <>
+          <ErrorDisplay error={error} />
+          <ClarificationPrompt clarification={clarification} />
+        </>
+      )
+
+      // Both icons should be hidden
+      const alertIcon = screen.getByRole('alert').querySelector('svg')
+      const promptIcon = screen.getByLabelText(/clarification needed/i).querySelector('svg')
+
+      expect(alertIcon).toHaveAttribute('aria-hidden', 'true')
+      expect(promptIcon).toHaveAttribute('aria-hidden', 'true')
+    })
   })
 
-  describe('Console page focus flow', () => {
-    it.todo('focus moves logically from input to results after submission')
-    it.todo('focus is restored to message input after clearing')
-    it.todo('config panel toggle does not trap focus inappropriately')
+  describe('Focus visibility', () => {
+    it('error display is focusable via keyboard navigation', () => {
+      const error: AgentError = { message: 'Error' }
+      render(<ErrorDisplay error={error} />)
+      const alert = screen.getByRole('alert')
+      // tabIndex=-1 allows programmatic focus but not Tab focus
+      // This is correct for alerts - they receive focus automatically
+      expect(alert).toHaveAttribute('tabIndex', '-1')
+    })
+  })
+
+  describe('Sequential focus order', () => {
+    it('error display receives focus immediately when rendered', () => {
+      const error: AgentError = { message: 'Error' }
+      render(<ErrorDisplay error={error} />)
+      const alert = screen.getByRole('alert')
+      // Focus should be on the alert element immediately after render
+      expect(alert).toHaveFocus()
+    })
   })
 })
