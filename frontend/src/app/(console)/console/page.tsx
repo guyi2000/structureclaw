@@ -22,6 +22,11 @@ import {
  * Composes all console components into a cohesive experience:
  * - Left panel: Input controls (endpoint, message, model, config)
  * - Right panel: Results and debug output
+ *
+ * Accessibility features:
+ * - Main landmark with aria-label for screen reader navigation
+ * - Sections with aria-labels for semantic structure
+ * - aria-live region for dynamic content announcements
  */
 export default function ConsolePage() {
   const result = useStore((state) => state.result)
@@ -29,13 +34,13 @@ export default function ConsolePage() {
   const error = useStore((state) => state.error)
 
   return (
-    <div className="h-[calc(100vh-8rem)]">
+    <main className="h-[calc(100vh-8rem)]" aria-label="Agent Console">
       <SplitPanel
         defaultLayout={[40, 60]}
         direction="horizontal"
         className="h-full"
         left={
-          <div className="p-4 space-y-4 overflow-auto h-full">
+          <section aria-label="Input Controls" className="p-4 space-y-4 overflow-auto h-full">
             <EndpointSelector />
             <MessageInput />
             <ModelJsonPanel />
@@ -44,10 +49,10 @@ export default function ConsolePage() {
               <StatusIndicator state={connectionState} />
               <ExecuteButton />
             </div>
-          </div>
+          </section>
         }
         right={
-          <div className="p-4 space-y-4 overflow-auto h-full">
+          <section aria-label="Results" aria-live="polite" className="p-4 space-y-4 overflow-auto h-full">
             {/* Error display */}
             <ErrorDisplay error={error} />
 
@@ -62,9 +67,9 @@ export default function ConsolePage() {
 
             {/* Debug output */}
             <DebugOutput />
-          </div>
+          </section>
         }
       />
-    </div>
+    </main>
   )
 }
