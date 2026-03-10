@@ -6,12 +6,23 @@ import { AgentService } from '../services/agent.js';
 const chatService = new ChatService();
 const agentService = new AgentService();
 
+const optionalIdSchema = z.preprocess((value) => {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  return value;
+}, z.string().optional());
+
 // 请求验证
 const sendMessageSchema = z.object({
   message: z.string().min(1).max(10000),
   mode: z.enum(['chat', 'execute', 'auto']).optional(),
-  conversationId: z.string().optional(),
-  traceId: z.string().optional(),
+  conversationId: optionalIdSchema,
+  traceId: optionalIdSchema,
   context: z.object({
     projectId: z.string().optional(),
     model: z.record(z.any()).optional(),
@@ -35,8 +46,8 @@ const createConversationSchema = z.object({
 
 const executeSchema = z.object({
   message: z.string().min(1).max(10000),
-  conversationId: z.string().optional(),
-  traceId: z.string().optional(),
+  conversationId: optionalIdSchema,
+  traceId: optionalIdSchema,
   context: z.object({
     model: z.record(z.any()).optional(),
     modelFormat: z.string().optional(),
@@ -55,8 +66,8 @@ const executeSchema = z.object({
 const streamMessageSchema = z.object({
   message: z.string().min(1).max(10000),
   mode: z.enum(['chat', 'execute', 'auto']).optional(),
-  conversationId: z.string().optional(),
-  traceId: z.string().optional(),
+  conversationId: optionalIdSchema,
+  traceId: optionalIdSchema,
   context: z.object({
     projectId: z.string().optional(),
     model: z.record(z.any()).optional(),
