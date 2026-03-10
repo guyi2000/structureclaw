@@ -5,6 +5,7 @@ import { AlertCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Card, CardContent } from '@/components/ui/card'
 import type { AgentError } from '@/lib/api/contracts/agent'
+import { useI18n } from '@/lib/i18n'
 
 interface ErrorDisplayProps {
   /** Error object from API or validation */
@@ -30,6 +31,7 @@ interface ErrorDisplayProps {
  */
 export function ErrorDisplay({ error, className }: ErrorDisplayProps) {
   const alertRef = useRef<HTMLDivElement>(null)
+  const { t } = useI18n()
 
   // Focus the alert when error appears (accessibility)
   useEffect(() => {
@@ -57,7 +59,7 @@ export function ErrorDisplay({ error, className }: ErrorDisplayProps) {
             aria-hidden="true"
           />
           <div className="flex-1 min-w-0">
-            <p className="font-semibold text-destructive">Error</p>
+            <p className="font-semibold text-destructive">{t('errorTitle')}</p>
             <p className="text-sm mt-1 text-destructive/90">{error.message}</p>
             {error.code && (
               <p className="text-xs mt-1 text-destructive/70">Code: {error.code}</p>

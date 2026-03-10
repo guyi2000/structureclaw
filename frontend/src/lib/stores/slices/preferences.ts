@@ -1,5 +1,7 @@
 import { type StateCreator } from 'zustand'
 
+export type AppLocale = 'en' | 'zh'
+
 /**
  * Preferences State Interface
  *
@@ -12,11 +14,11 @@ import { type StateCreator } from 'zustand'
  * This slice is reserved for future preferences that need Zustand state management.
  */
 export interface PreferencesState {
-  // Reserved for future preferences
+  locale: AppLocale
 }
 
 export interface PreferencesActions {
-  // Reserved for future preference actions
+  setLocale: (locale: AppLocale) => void
 }
 
 export type PreferencesSlice = PreferencesState & PreferencesActions
@@ -25,7 +27,9 @@ export type PreferencesSlice = PreferencesState & PreferencesActions
  * Initial preferences state.
  * Currently empty - theme is handled by next-themes.
  */
-export const initialPreferencesState: PreferencesState = {}
+export const initialPreferencesState: PreferencesState = {
+  locale: 'en',
+}
 
 /**
  * Create preferences slice for Zustand store.
@@ -36,6 +40,7 @@ export const createPreferencesSlice: StateCreator<
   [],
   [],
   PreferencesSlice
-> = () => ({
+> = (set) => ({
   ...initialPreferencesState,
+  setLocale: (locale) => set({ locale }),
 })

@@ -33,7 +33,7 @@ const createInitialState = (): Partial<StoreState> => ({
   mode: 'auto',
   conversationId: null,
   traceId: null,
-  message: '',
+  message: 'Keyboard test message',
   modelText: '',
   includeModel: false,
   analysisType: 'none',
@@ -85,7 +85,7 @@ describe('Keyboard Navigation (ACCS-01)', () => {
 
       // Get all form controls
       const comboboxes = screen.getAllByRole('combobox')
-      const textarea = screen.getByPlaceholderText(/enter your message/i)
+      const textarea = screen.getByRole('textbox', { name: /message/i })
       const textInputs = screen.getAllByRole('textbox')
 
       // There are 5 comboboxes (Endpoint, Mode, Analysis Type, Report Format, Report Output)
@@ -124,7 +124,7 @@ describe('Keyboard Navigation (ACCS-01)', () => {
       const user = userEvent.setup()
       await renderConsolePage()
 
-      const messageTextarea = screen.getByPlaceholderText(/enter your message/i)
+      const messageTextarea = screen.getByRole('textbox', { name: /message/i })
       expect(messageTextarea).toBeInTheDocument()
 
       // Focus via click then verify keyboard input works
@@ -134,7 +134,7 @@ describe('Keyboard Navigation (ACCS-01)', () => {
 
       // Verify we can type into it - the textarea is controlled by Zustand
       // so we verify it's the correct element by checking its attributes
-      expect(messageTextarea).toHaveAttribute('placeholder', 'Enter your message...')
+      expect(messageTextarea).toHaveAttribute('placeholder')
     })
 
     it('execute buttons are reachable via Tab', async () => {
@@ -160,8 +160,8 @@ describe('Keyboard Navigation (ACCS-01)', () => {
       // Get all checkboxes
       const checkboxes = screen.getAllByRole('checkbox')
 
-      // There are 5 checkboxes (1 in ModelJsonPanel + 4 in ConfigPanel)
-      expect(checkboxes.length).toBe(5)
+      // There are 4 checkboxes (1 in ModelJsonPanel + 3 in ConfigPanel)
+      expect(checkboxes.length).toBe(4)
 
       // Tab to first checkbox and verify focus
       const firstCheckbox = checkboxes[0]
@@ -195,7 +195,7 @@ describe('Keyboard Navigation (ACCS-01)', () => {
       expect(textbox.length).toBeGreaterThanOrEqual(3) // Message, ConvID, TraceID
 
       const checkboxes = screen.getAllByRole('checkbox')
-      expect(checkboxes.length).toBe(5)
+      expect(checkboxes.length).toBe(4)
 
       const buttons = screen.getAllByRole('button')
       // Filter to execute buttons
@@ -549,7 +549,7 @@ describe('Keyboard Navigation (ACCS-01)', () => {
       const user = userEvent.setup()
       await renderConsolePage()
 
-      const messageTextarea = screen.getByPlaceholderText(/enter your message/i)
+      const messageTextarea = screen.getByRole('textbox', { name: /message/i })
 
       await user.click(messageTextarea)
       // Verify the textarea is in the document and can receive input
@@ -560,7 +560,7 @@ describe('Keyboard Navigation (ACCS-01)', () => {
       const user = userEvent.setup()
       await renderConsolePage()
 
-      const messageTextarea = screen.getByPlaceholderText(/enter your message/i)
+      const messageTextarea = screen.getByRole('textbox', { name: /message/i })
 
       await user.click(messageTextarea)
       // The textarea is controlled by Zustand, verify it's accessible
@@ -608,14 +608,13 @@ describe('Keyboard Navigation (ACCS-01)', () => {
     it('checkboxes have proper aria-labels', async () => {
       await renderConsolePage()
 
-      // There are 5 checkboxes total: 1 in ModelJsonPanel + 4 in ConfigPanel
+      // There are 4 checkboxes total: 1 in ModelJsonPanel + 3 in ConfigPanel
       const checkboxes = screen.getAllByRole('checkbox')
-      expect(checkboxes.length).toBe(5)
+      expect(checkboxes.length).toBe(4)
 
-      // Verify specific checkboxes by name - use getAllByRole since there are
-      // two "Include Model" checkboxes (one in ModelJsonPanel, one in ConfigPanel)
+      // Verify specific checkboxes by name
       const includeModelCheckboxes = screen.getAllByRole('checkbox', { name: /include model/i })
-      expect(includeModelCheckboxes.length).toBe(2)
+      expect(includeModelCheckboxes.length).toBe(1)
 
       const autoAnalyzeCheckbox = screen.getByRole('checkbox', { name: /auto analyze/i })
       expect(autoAnalyzeCheckbox).toBeInTheDocument()

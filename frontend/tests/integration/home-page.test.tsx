@@ -84,10 +84,9 @@ describe('Home Page Integration (PAGE-01)', () => {
     expect(hiddenIcons.length).toBeGreaterThan(0)
   })
 
-  it('keeps Chinese description for consistency', () => {
+  it('uses English as default language', () => {
     render(<HomePage />)
 
-    // Should include Chinese text for product description
-    expect(screen.getByText(/结构工程 AI 工作台/)).toBeInTheDocument()
+    expect(screen.getByText(/structural engineering ai workspace/i)).toBeInTheDocument()
   })
 })

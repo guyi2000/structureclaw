@@ -5,6 +5,7 @@ import { Timeline } from '../timeline'
 import { ReportSummary } from '../report-summary'
 import type { AgentResult } from '@/lib/stores/slices/console'
 import type { AgentToolCall as TimelineToolCall } from '../timeline/timeline-item'
+import { useI18n } from '@/lib/i18n'
 
 export interface ResultDisplayProps {
   result: AgentResult | null
@@ -14,6 +15,7 @@ export interface ResultDisplayProps {
  * ResultDisplay is the main container that composes all result components
  */
 export function ResultDisplay({ result }: ResultDisplayProps) {
+  const { t } = useI18n()
   // Convert AgentToolCall from API to TimelineToolCall format
   const timelineCalls: TimelineToolCall[] = result?.toolCalls?.map(call => ({
     tool: call.name || call.tool || 'unknown',
@@ -26,9 +28,9 @@ export function ResultDisplay({ result }: ResultDisplayProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Execution Results</CardTitle>
+        <CardTitle>{t('executionResults')}</CardTitle>
         <CardDescription>
-          Agent/Chat returned structured information
+          {t('executionResultsDesc')}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -66,7 +68,7 @@ export function ResultDisplay({ result }: ResultDisplayProps) {
 
         {timelineCalls.length > 0 && (
           <div>
-            <h3 className="text-sm font-medium mb-2">Execution Timeline</h3>
+            <h3 className="text-sm font-medium mb-2">{t('timeline')}</h3>
             <Timeline calls={timelineCalls} />
           </div>
         )}

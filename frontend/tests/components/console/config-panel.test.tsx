@@ -78,10 +78,9 @@ describe('ConfigPanel (CONS-05, CONS-06)', () => {
     expect(screen.getByRole('option', { name: /both/i })).toBeInTheDocument()
   })
 
-  it('renders all four checkboxes', () => {
+  it('renders three execution checkboxes', () => {
     renderWithProvider()
 
-    expect(screen.getByRole('checkbox', { name: /include model/i })).toBeInTheDocument()
     expect(screen.getByRole('checkbox', { name: /auto analyze/i })).toBeInTheDocument()
     expect(screen.getByRole('checkbox', { name: /auto code check/i })).toBeInTheDocument()
     expect(screen.getByRole('checkbox', { name: /include report/i })).toBeInTheDocument()
@@ -117,14 +116,14 @@ describe('ConfigPanel (CONS-05, CONS-06)', () => {
   it('toggling checkbox updates store', async () => {
     renderWithProvider()
 
-    // Find and click the includeModel checkbox
-    const checkbox = screen.getByRole('checkbox', { name: /include model/i })
+    // Find and click the autoAnalyze checkbox
+    const checkbox = screen.getByRole('checkbox', { name: /auto analyze/i })
     fireEvent.click(checkbox)
 
     // Verify store updated - use a test component to read store
     function StoreReader() {
-      const includeModel = useStore((state) => state.includeModel)
-      return <span data-testid="store-include-model">{includeModel ? 'true' : 'false'}</span>
+      const autoAnalyze = useStore((state) => state.autoAnalyze)
+      return <span data-testid="store-auto-analyze">{autoAnalyze ? 'true' : 'false'}</span>
     }
 
     render(
@@ -133,8 +132,8 @@ describe('ConfigPanel (CONS-05, CONS-06)', () => {
       </AppStoreProvider>
     )
 
-    // The default should be false
-    expect(screen.getByTestId('store-include-model')).toHaveTextContent('false')
+    // The default should be false in a fresh provider
+    expect(screen.getByTestId('store-auto-analyze')).toHaveTextContent('false')
   })
 
   it('renders selects in a 3-column grid', () => {

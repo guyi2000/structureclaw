@@ -22,7 +22,7 @@ const createInitialState = (overrides: Partial<StoreState> = {}): Partial<StoreS
   mode: 'auto',
   conversationId: null,
   traceId: null,
-  message: '',
+  message: 'Run default test message',
   modelText: '',
   includeModel: false,
   analysisType: 'none',
@@ -71,7 +71,7 @@ describe('ConsolePage Integration (CONS-13)', () => {
     expect(screen.getByRole('combobox', { name: /endpoint/i })).toBeInTheDocument()
 
     // Message textarea should be present
-    expect(screen.getByPlaceholderText(/enter your message/i)).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: /message/i })).toBeInTheDocument()
 
     // Model JSON panel should be present
     expect(screen.getByText(/model json/i)).toBeInTheDocument()

@@ -1,6 +1,7 @@
 'use client'
 
 import { useStore } from '@/lib/stores/context'
+import { useI18n } from '@/lib/i18n'
 import { SplitPanel } from '@/components/layout/split-panel'
 import {
   EndpointSelector,
@@ -15,6 +16,7 @@ import {
   ErrorDisplay,
   ClarificationPrompt,
 } from '@/components/console'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 
 /**
  * Console Page - Complete console composition with split panel layout
@@ -32,15 +34,17 @@ export default function ConsolePage() {
   const result = useStore((state) => state.result)
   const connectionState = useStore((state) => state.connectionState)
   const error = useStore((state) => state.error)
+  const { t } = useI18n()
+  const hasResultContent = Boolean(result || error)
 
   return (
-    <main className="h-[calc(100vh-8rem)]" aria-label="Agent Console">
+    <main className="h-[calc(100vh-8rem)]" aria-label={t('agentConsole')}>
       <SplitPanel
         defaultLayout={[40, 60]}
         direction="horizontal"
         className="h-full"
         left={
-          <section aria-label="Input Controls" className="p-4 space-y-4 overflow-auto h-full">
+          <section aria-label={t('inputControls')} className="p-4 space-y-4 overflow-auto h-full">
             <EndpointSelector />
             <MessageInput />
             <ModelJsonPanel />
@@ -52,7 +56,7 @@ export default function ConsolePage() {
           </section>
         }
         right={
-          <section aria-label="Results" aria-live="polite" className="p-4 space-y-4 overflow-auto h-full">
+          <section aria-label={t('results')} aria-live="polite" className="p-4 space-y-4 overflow-auto h-full">
             {/* Error display */}
             <ErrorDisplay error={error} />
 
@@ -61,6 +65,18 @@ export default function ConsolePage() {
 
             {/* Result display */}
             {result && <ResultDisplay result={result} />}
+
+            {!hasResultContent && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>{t('noResultsYet')}</CardTitle>
+                  <CardDescription>{t('noResultsHint')}</CardDescription>
+                </CardHeader>
+                <CardContent className="text-sm text-muted-foreground">
+                  {t('executeHint')}
+                </CardContent>
+              </Card>
+            )}
 
             {/* Artifacts list */}
             {result?.artifacts && <ArtifactsList artifacts={result.artifacts} />}

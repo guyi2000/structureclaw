@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/select'
 import { Checkbox } from '@/components/ui/checkbox'
 import type { AnalysisType, ReportFormat, ReportOutput } from '@/lib/stores/slices/console'
+import { useI18n } from '@/lib/i18n'
 
 /**
  * ConfigPanel - Configuration options and checkboxes for console execution
@@ -21,7 +22,6 @@ export function ConfigPanel() {
   const analysisType = useStore((state) => state.analysisType)
   const reportFormat = useStore((state) => state.reportFormat)
   const reportOutput = useStore((state) => state.reportOutput)
-  const includeModel = useStore((state) => state.includeModel)
   const autoAnalyze = useStore((state) => state.autoAnalyze)
   const autoCodeCheck = useStore((state) => state.autoCodeCheck)
   const includeReport = useStore((state) => state.includeReport)
@@ -29,10 +29,10 @@ export function ConfigPanel() {
   const setAnalysisType = useStore((state) => state.setAnalysisType)
   const setReportFormat = useStore((state) => state.setReportFormat)
   const setReportOutput = useStore((state) => state.setReportOutput)
-  const setIncludeModel = useStore((state) => state.setIncludeModel)
   const setAutoAnalyze = useStore((state) => state.setAutoAnalyze)
   const setAutoCodeCheck = useStore((state) => state.setAutoCodeCheck)
   const setIncludeReport = useStore((state) => state.setIncludeReport)
+  const { t } = useI18n()
 
   return (
     <div className="space-y-4">
@@ -41,7 +41,7 @@ export function ConfigPanel() {
         {/* Analysis Type Select */}
         <div className="space-y-2">
           <label htmlFor="analysis-type-select" className="text-sm font-medium">
-            Analysis Type
+            {t('analysisType')}
           </label>
           <Select
             value={analysisType}
@@ -62,7 +62,7 @@ export function ConfigPanel() {
         {/* Report Format Select */}
         <div className="space-y-2">
           <label htmlFor="report-format-select" className="text-sm font-medium">
-            Report Format
+            {t('reportFormat')}
           </label>
           <Select
             value={reportFormat}
@@ -82,7 +82,7 @@ export function ConfigPanel() {
         {/* Report Output Select */}
         <div className="space-y-2">
           <label htmlFor="report-output-select" className="text-sm font-medium">
-            Report Output
+            {t('reportOutput')}
           </label>
           <Select
             value={reportOutput}
@@ -102,29 +102,16 @@ export function ConfigPanel() {
 
       {/* Checkboxes Row */}
       <div className="flex flex-wrap gap-4">
-        {/* Include Model Checkbox */}
-        <div className="flex items-center space-x-2">
-          <Checkbox
-            id="include-model"
-            aria-label="Include Model"
-            checked={includeModel}
-            onCheckedChange={(checked) => setIncludeModel(checked === true)}
-          />
-          <label htmlFor="include-model" className="text-sm font-medium cursor-pointer">
-            Include Model
-          </label>
-        </div>
-
         {/* Auto Analyze Checkbox */}
         <div className="flex items-center space-x-2">
           <Checkbox
             id="auto-analyze"
-            aria-label="Auto Analyze"
+            aria-label={t('autoAnalyze')}
             checked={autoAnalyze}
             onCheckedChange={(checked) => setAutoAnalyze(checked === true)}
           />
           <label htmlFor="auto-analyze" className="text-sm font-medium cursor-pointer">
-            Auto Analyze
+            {t('autoAnalyze')}
           </label>
         </div>
 
@@ -132,12 +119,12 @@ export function ConfigPanel() {
         <div className="flex items-center space-x-2">
           <Checkbox
             id="auto-code-check"
-            aria-label="Auto Code Check"
+            aria-label={t('autoCodeCheck')}
             checked={autoCodeCheck}
             onCheckedChange={(checked) => setAutoCodeCheck(checked === true)}
           />
           <label htmlFor="auto-code-check" className="text-sm font-medium cursor-pointer">
-            Auto Code Check
+            {t('autoCodeCheck')}
           </label>
         </div>
 
@@ -145,12 +132,12 @@ export function ConfigPanel() {
         <div className="flex items-center space-x-2">
           <Checkbox
             id="include-report"
-            aria-label="Include Report"
+            aria-label={t('includeReport')}
             checked={includeReport}
             onCheckedChange={(checked) => setIncludeReport(checked === true)}
           />
           <label htmlFor="include-report" className="text-sm font-medium cursor-pointer">
-            Include Report
+            {t('includeReport')}
           </label>
         </div>
       </div>

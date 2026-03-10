@@ -28,7 +28,7 @@ describe('ExecuteButton (CONS-07)', () => {
 
   const renderWithProvider = () => {
     return render(
-      <AppStoreProvider>
+      <AppStoreProvider initialState={{ message: 'run test' }}>
         <ExecuteButton />
       </AppStoreProvider>
     )
@@ -45,14 +45,14 @@ describe('ExecuteButton (CONS-07)', () => {
   })
 
   it('buttons are disabled when loading is true', () => {
-    const { rerender } = render(
+    render(
       <AppStoreProvider initialState={{
         loading: true,
         endpoint: 'chat-message',
         mode: 'auto',
         conversationId: null,
         traceId: null,
-        message: '',
+        message: 'hello',
         modelText: '',
         includeModel: false,
         analysisType: 'none',
@@ -87,6 +87,20 @@ describe('ExecuteButton (CONS-07)', () => {
         setStreamFrames: () => {},
         setError: () => {},
       } as any}>
+        <ExecuteButton />
+      </AppStoreProvider>
+    )
+
+    const sendButton = screen.getByRole('button', { name: /send request/i })
+    const streamButton = screen.getByRole('button', { name: /stream.*sse/i })
+
+    expect(sendButton).toBeDisabled()
+    expect(streamButton).toBeDisabled()
+  })
+
+  it('buttons are disabled when message is empty', () => {
+    render(
+      <AppStoreProvider initialState={{ message: '' }}>
         <ExecuteButton />
       </AppStoreProvider>
     )

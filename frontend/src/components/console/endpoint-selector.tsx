@@ -9,6 +9,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/lib/i18n'
 
 /**
  * EndpointSelector - Dual select for endpoint and mode selection
@@ -22,6 +23,7 @@ export function EndpointSelector() {
   const mode = useStore((state) => state.mode)
   const setEndpoint = useStore((state) => state.setEndpoint)
   const setMode = useStore((state) => state.setMode)
+  const { t } = useI18n()
 
   // Mode is disabled when endpoint is chat-execute
   const isModeDisabled = endpoint === 'chat-execute'
@@ -31,7 +33,7 @@ export function EndpointSelector() {
       {/* Endpoint Select */}
       <div className="space-y-2">
         <label htmlFor="endpoint-select" className="text-sm font-medium">
-          Endpoint
+          {t('endpoint')}
         </label>
         <Select
           value={endpoint}
@@ -51,7 +53,7 @@ export function EndpointSelector() {
       {/* Mode Select */}
       <div className="space-y-2">
         <label htmlFor="mode-select" className="text-sm font-medium">
-          Mode
+          {t('mode')}
         </label>
         <Select
           value={mode}
@@ -73,7 +75,7 @@ export function EndpointSelector() {
         </Select>
         {isModeDisabled && (
           <p className="text-xs text-muted-foreground">
-            Mode is fixed for chat-execute endpoint
+            {t('modeFixedHint')}
           </p>
         )}
       </div>

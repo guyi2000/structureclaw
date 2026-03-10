@@ -3,6 +3,7 @@
 import { Loader2, CheckCircle2, XCircle, Radio } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ConnectionState } from '@/lib/api/contracts/agent'
+import { useI18n } from '@/lib/i18n'
 
 interface StatusIndicatorProps {
   state: ConnectionState
@@ -62,8 +63,16 @@ const stateConfig: Record<
  * label, and styling. Connecting and receiving states show animated spinner.
  */
 export function StatusIndicator({ state, className }: StatusIndicatorProps) {
+  const { t } = useI18n()
   const config = stateConfig[state]
   const Icon = config.icon
+  const labelMap: Record<ConnectionState, string> = {
+    disconnected: t('connectionIdle'),
+    connecting: t('connectionConnecting'),
+    connected: t('connectionConnected'),
+    error: t('connectionError'),
+  }
+  const label = labelMap[state]
 
   return (
     <div
@@ -75,9 +84,9 @@ export function StatusIndicator({ state, className }: StatusIndicatorProps) {
     >
       <Icon
         className={cn('h-4 w-4', config.iconClass, config.animate && 'animate-spin')}
-        aria-label={config.label}
+        aria-label={label}
       />
-      <span>{config.label}</span>
+      <span>{label}</span>
     </div>
   )
 }

@@ -1,27 +1,31 @@
+'use client'
+
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { useI18n } from '@/lib/i18n'
 import Link from 'next/link'
 import { ArrowRight, Zap, Shield, FileText } from 'lucide-react'
 
-const features = [
-  {
-    icon: Zap,
-    title: 'AI-Powered Analysis',
-    description: 'Automatic structural analysis with intelligent code checking',
-  },
-  {
-    icon: Shield,
-    title: 'GB50017 Compliant',
-    description: 'Built-in Chinese steel structure code verification',
-  },
-  {
-    icon: FileText,
-    title: 'Auto Report Generation',
-    description: 'Generate professional reports in Markdown and JSON formats',
-  },
-]
-
 export default function HomePage() {
+  const { t } = useI18n()
+  const features = [
+    {
+      icon: Zap,
+      title: t('feature1Title'),
+      description: t('feature1Desc'),
+    },
+    {
+      icon: Shield,
+      title: t('feature2Title'),
+      description: t('feature2Desc'),
+    },
+    {
+      icon: FileText,
+      title: t('feature3Title'),
+      description: t('feature3Desc'),
+    },
+  ]
+
   return (
     <main className="flex flex-col min-h-[calc(100vh-3.5rem)]">
       {/* Hero Section */}
@@ -30,14 +34,14 @@ export default function HomePage() {
         aria-labelledby="hero-heading"
       >
         <h1 id="hero-heading" className="text-4xl font-bold tracking-tight sm:text-5xl">
-          StructureClaw
+          {t('appName')}
         </h1>
         <p className="text-muted-foreground text-center max-w-md text-lg">
-          结构工程 AI 工作台 - 美观、专业、易用
+          {t('heroSubtitle')}
         </p>
         <Link href="/console">
-          <Button size="lg" aria-label="Enter the Agent Console">
-            Enter Console
+          <Button size="lg" aria-label={t('enterConsole')}>
+            {t('enterConsole')}
             <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
           </Button>
         </Link>

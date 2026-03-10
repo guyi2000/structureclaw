@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/collapsible'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/lib/i18n'
 
 /**
  * ModelJsonPanel - Collapsible JSON input for model configuration
@@ -30,6 +31,7 @@ export function ModelJsonPanel() {
 
   const [isOpen, setIsOpen] = useState(true)
   const [jsonError, setJsonError] = useState<string | null>(null)
+  const { t, locale } = useI18n()
 
   const validateJson = (value: string) => {
     if (!value.trim()) {
@@ -41,7 +43,8 @@ export function ModelJsonPanel() {
       JSON.parse(value)
       setJsonError(null)
     } catch (e) {
-      setJsonError('Invalid JSON: ' + (e as Error).message)
+      const prefix = locale === 'zh' ? 'JSON 无效：' : 'Invalid JSON: '
+      setJsonError(prefix + (e as Error).message)
     }
   }
 
@@ -56,7 +59,7 @@ export function ModelJsonPanel() {
       <div className="flex items-center space-x-2">
         <Checkbox
           id="include-model"
-          aria-label="Include Model JSON"
+          aria-label={t('includeModelJson')}
           checked={includeModel}
           onCheckedChange={(checked) => setIncludeModel(checked === true)}
         />
@@ -64,7 +67,7 @@ export function ModelJsonPanel() {
           htmlFor="include-model"
           className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
         >
-          Include Model JSON
+          {t('includeModelJson')}
         </label>
       </div>
 
@@ -82,13 +85,13 @@ export function ModelJsonPanel() {
               ) : (
                 <ChevronRight className="h-4 w-4" />
               )}
-              <span className="text-sm">Model JSON</span>
+              <span className="text-sm">{t('modelJson')}</span>
             </Button>
           </CollapsibleTrigger>
 
           <CollapsibleContent className="space-y-2">
             <Textarea
-              aria-label="Model JSON"
+              aria-label={t('modelJson')}
               placeholder='{"modelFormat": "structuremodel-v1", ...}'
               rows={6}
               value={modelText}
@@ -101,7 +104,7 @@ export function ModelJsonPanel() {
 
             {/* Hint Text */}
             <p className="text-xs text-muted-foreground">
-              modelFormat: structuremodel-v1
+              {t('modelJsonHint')}
             </p>
 
             {/* Error Message */}

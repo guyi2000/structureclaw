@@ -20,7 +20,7 @@ describe('useConsoleExecution hook', () => {
   })
 
   const wrapper = ({ children }: { children: React.ReactNode }) => (
-    <AppStoreProvider>{children}</AppStoreProvider>
+    <AppStoreProvider initialState={{ message: 'run analysis' }}>{children}</AppStoreProvider>
   )
 
   const renderWithProvider = () => {
@@ -74,6 +74,10 @@ describe('useConsoleExecution hook', () => {
       expect(url).toContain('/api/v1/chat/message')
       expect(options.method).toBe('POST')
       expect(options.headers['Content-Type']).toBe('application/json')
+      const payload = JSON.parse(options.body)
+      expect(payload.message).toBe('run analysis')
+      expect(payload).not.toHaveProperty('conversationId')
+      expect(payload).not.toHaveProperty('traceId')
     })
 
     it('should validate model JSON before sending when includeModel is true', async () => {
@@ -95,7 +99,7 @@ describe('useConsoleExecution hook', () => {
             mode: 'auto',
             conversationId: null,
             traceId: null,
-            message: '',
+            message: 'validate model',
             analysisType: 'none',
             reportFormat: 'markdown',
             reportOutput: 'inline',

@@ -3,6 +3,7 @@
 import { useStore } from '@/lib/stores/context'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
+import { useI18n } from '@/lib/i18n'
 
 /**
  * MessageInput - Message and context fields input
@@ -17,18 +18,19 @@ export function MessageInput() {
   const setMessage = useStore((state) => state.setMessage)
   const setConversationId = useStore((state) => state.setConversationId)
   const setTraceId = useStore((state) => state.setTraceId)
+  const { t } = useI18n()
 
   return (
     <div className="space-y-4">
       {/* Main Message Textarea */}
       <div className="space-y-2">
         <label htmlFor="message-input" className="text-sm font-medium">
-          Message
+          {t('message')}
         </label>
         <Textarea
           id="message-input"
-          aria-label="Message"
-          placeholder="Enter your message..."
+          aria-label={t('message')}
+          placeholder={t('messagePlaceholder')}
           rows={4}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
@@ -40,30 +42,36 @@ export function MessageInput() {
         {/* Conversation ID Input */}
         <div className="space-y-2">
           <label htmlFor="conversation-id" className="text-sm font-medium">
-            Conversation ID
+            {t('conversationId')}
           </label>
           <Input
             id="conversation-id"
-            aria-label="Conversation ID"
+            aria-label={t('conversationId')}
             type="text"
-            placeholder="optional"
+            placeholder={t('optional')}
             value={conversationId ?? ''}
-            onChange={(e) => setConversationId(e.target.value || null)}
+            onChange={(e) => {
+              const value = e.target.value.trim()
+              setConversationId(value.length > 0 ? value : null)
+            }}
           />
         </div>
 
         {/* Trace ID Input */}
         <div className="space-y-2">
           <label htmlFor="trace-id" className="text-sm font-medium">
-            Trace ID
+            {t('traceId')}
           </label>
           <Input
             id="trace-id"
-            aria-label="Trace ID"
+            aria-label={t('traceId')}
             type="text"
-            placeholder="optional"
+            placeholder={t('optional')}
             value={traceId ?? ''}
-            onChange={(e) => setTraceId(e.target.value || null)}
+            onChange={(e) => {
+              const value = e.target.value.trim()
+              setTraceId(value.length > 0 ? value : null)
+            }}
           />
         </div>
       </div>

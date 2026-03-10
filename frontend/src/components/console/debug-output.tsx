@@ -1,7 +1,12 @@
 'use client'
 
+import { useState } from 'react'
 import { useStore } from '@/lib/stores/context'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Button } from '@/components/ui/button'
+import { ChevronDown, ChevronRight } from 'lucide-react'
+import { useI18n } from '@/lib/i18n'
 
 /**
  * Debug output panel for viewing raw API response and stream frames
@@ -11,17 +16,30 @@ export function DebugOutput() {
   const rawResponse = useStore((state) => state.rawResponse)
   const streamFrames = useStore((state) => state.streamFrames)
   const error = useStore((state) => state.error)
+  const { t } = useI18n()
+  const [isOpen, setIsOpen] = useState(false)
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-lg">Debug Output</CardTitle>
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-lg">{t('debugOutput')}</CardTitle>
+          <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" size="sm" aria-label={t('debugOutput')}>
+                {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              </Button>
+            </CollapsibleTrigger>
+          </Collapsible>
+        </div>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+        <CollapsibleContent>
+          <CardContent className="space-y-4">
         {/* Error section */}
         {error && (
           <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-            <span className="font-semibold">Error: </span>
+            <span className="font-semibold">{t('errorTitle')}: </span>
             {error.message}
             {error.code && <span className="ml-2 text-xs opacity-70">({error.code})</span>}
           </div>
@@ -29,22 +47,24 @@ export function DebugOutput() {
 
         {/* Raw JSON section */}
         <div>
-          <h4 className="mb-2 text-sm font-medium text-muted-foreground">Raw JSON</h4>
+          <h4 className="mb-2 text-sm font-medium text-muted-foreground">{t('rawJson')}</h4>
           <pre className="overflow-auto rounded-md bg-muted p-3 text-xs font-mono">
-            {rawResponse ? JSON.stringify(rawResponse, null, 2) : 'None'}
+            {rawResponse ? JSON.stringify(rawResponse, null, 2) : t('none')}
           </pre>
         </div>
 
         {/* Stream Frames section */}
         <div>
-          <h4 className="mb-2 text-sm font-medium text-muted-foreground">Stream Frames</h4>
+          <h4 className="mb-2 text-sm font-medium text-muted-foreground">{t('streamFrames')}</h4>
           <pre className="overflow-auto rounded-md bg-muted p-3 text-xs font-mono">
             {streamFrames.length > 0
               ? streamFrames.map((frame) => JSON.stringify(frame)).join('\n')
-              : 'No frames'}
+              : t('noFrames')}
           </pre>
         </div>
-      </CardContent>
+          </CardContent>
+        </CollapsibleContent>
+      </Collapsible>
     </Card>
   )
 }

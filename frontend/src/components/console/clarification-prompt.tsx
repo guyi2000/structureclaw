@@ -4,6 +4,7 @@ import { AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Card, CardContent } from '@/components/ui/card'
 import type { Clarification } from '@/lib/api/contracts/agent'
+import { useI18n } from '@/lib/i18n'
 
 interface ClarificationPromptProps {
   /** Clarification data from agent result */
@@ -28,6 +29,8 @@ interface ClarificationPromptProps {
  * - Decorative icon has aria-hidden="true"
  */
 export function ClarificationPrompt({ clarification, className }: ClarificationPromptProps) {
+  const { t } = useI18n()
+
   if (!clarification || !clarification.question) {
     return null
   }
@@ -50,7 +53,7 @@ export function ClarificationPrompt({ clarification, className }: ClarificationP
           />
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-amber-800 dark:text-amber-200">
-              Clarification Required
+              {t('clarificationRequired')}
             </p>
             <p className="text-sm mt-1 text-amber-700 dark:text-amber-300">
               {clarification.question}
@@ -58,7 +61,7 @@ export function ClarificationPrompt({ clarification, className }: ClarificationP
             {clarification.missingFields && clarification.missingFields.length > 0 && (
               <div className="mt-3">
                 <p className="text-xs font-medium text-amber-600 dark:text-amber-400 uppercase tracking-wide">
-                  Missing Fields
+                  {t('missingFields')}
                 </p>
                 <ul className="mt-1 list-disc list-inside text-sm text-amber-700 dark:text-amber-300">
                   {clarification.missingFields.map((field, index) => (

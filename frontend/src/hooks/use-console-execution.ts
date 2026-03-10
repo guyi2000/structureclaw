@@ -22,6 +22,44 @@ const ENDPOINT_PATHS = {
   'agent-run': '/api/v1/agent/run',
 } as const
 
+const normalizeOptionalString = (value: string | null | undefined): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
+
+const pruneEmptyValues = <T,>(value: T): T => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => pruneEmptyValues(item))
+      .filter((item) => item !== undefined) as T
+  }
+
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .map(([key, item]) => [key, pruneEmptyValues(item)] as const)
+      .filter(([, item]) => item !== undefined)
+
+    if (entries.length === 0) {
+      return undefined as T
+    }
+
+    return Object.fromEntries(entries) as T
+  }
+
+  if (value === null || value === undefined) {
+    return undefined as T
+  }
+
+  if (typeof value === 'string' && value.trim() === '') {
+    return undefined as T
+  }
+
+  return value
+}
+
 /**
  * useConsoleExecution - Hook for console execution operations
  *
@@ -57,6 +95,10 @@ export function useConsoleExecution() {
    * Validate model JSON if includeModel is true
    */
   const validateModelJson = useCallback((): { valid: boolean; error?: string } => {
+    if (!message.trim()) {
+      return { valid: false, error: 'Message is required' }
+    }
+
     if (!includeModel) {
       return { valid: true }
     }
@@ -71,19 +113,24 @@ export function useConsoleExecution() {
     } catch {
       return { valid: false, error: 'Invalid JSON in model text' }
     }
-  }, [includeModel, modelText])
+  }, [message, includeModel, modelText])
 
   /**
    * Build request payload based on endpoint type
    */
   const buildPayload = useCallback(() => {
-    const context = includeModel ? { modelText, includeModel } : undefined
+    const context = includeModel
+      ? {
+          modelText,
+          includeModel,
+        }
+      : undefined
 
     const basePayload = {
-      message,
-      conversationId,
-      traceId,
-      context,
+      message: message.trim(),
+      conversationId: normalizeOptionalString(conversationId),
+      traceId: normalizeOptionalString(traceId),
+      context: pruneEmptyValues(context),
     }
 
     switch (endpoint) {
@@ -91,13 +138,13 @@ export function useConsoleExecution() {
         return basePayload as ChatMessageRequest
 
       case 'chat-execute':
-        return {
+        return pruneEmptyValues({
           ...basePayload,
           mode,
-        } as ChatExecuteRequest
+        }) as ChatExecuteRequest
 
       case 'agent-run':
-        return {
+        return pruneEmptyValues({
           ...basePayload,
           mode,
           analysisType,
@@ -106,7 +153,7 @@ export function useConsoleExecution() {
           autoAnalyze,
           autoCodeCheck,
           includeReport,
-        } as AgentRunRequest
+        }) as AgentRunRequest
 
       default:
         return basePayload
