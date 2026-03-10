@@ -38,8 +38,10 @@ echo "StructureClaw startup checks"
 echo "Workspace: $ROOT_DIR"
 
 run_check "Backend regression" "./scripts/check-backend-regression.sh"
+run_check "Startup self-healing guards" "./scripts/validate-dev-startup-guards.sh"
 run_check "Frontend type-check" "npm run type-check --prefix frontend"
 run_check "Frontend lint" "npm run lint --prefix frontend"
+run_check "Frontend style pipeline guard" "npm run test:run --prefix frontend -- tests/postcss-config.test.ts"
 run_optional_check "Frontend build (optional)" "npm run build --prefix frontend"
 
 if [[ -x core/.venv-uv-lite/bin/python ]]; then
