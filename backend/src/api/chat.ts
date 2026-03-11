@@ -2,6 +2,8 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { ChatService } from '../services/chat.js';
 import { AgentService } from '../services/agent.js';
+import { config } from '../config/index.js';
+import { isLlmTimeoutError, toLlmApiError } from '../utils/llm-error.js';
 
 const chatService = new ChatService();
 const agentService = new AgentService();
@@ -102,50 +104,66 @@ export async function chatRoutes(fastify: FastifyInstance) {
       },
     },
   }, async (request: FastifyRequest<{ Body: z.infer<typeof sendMessageSchema> }>, reply: FastifyReply) => {
-    const body = sendMessageSchema.parse(request.body);
-    const userId = request.user?.id;
-    const mode = body.mode || 'auto';
+    try {
+      const body = sendMessageSchema.parse(request.body);
+      const userId = request.user?.id;
+      const mode = body.mode || 'auto';
 
-    const shouldExecute = mode === 'execute'
-      || (mode === 'auto' && Boolean(body.context?.model));
+      const shouldExecute = mode === 'execute'
+        || (mode === 'auto' && Boolean(body.context?.model));
 
-    if (shouldExecute) {
-      const result = await agentService.run({
+      if (shouldExecute) {
+        const result = await agentService.run({
+          message: body.message,
+          mode: 'execute',
+          conversationId: body.conversationId,
+          traceId: body.traceId,
+          context: {
+            model: body.context?.model,
+            modelFormat: body.context?.modelFormat,
+            analysisType: body.context?.analysisType,
+            parameters: body.context?.parameters,
+            autoAnalyze: body.context?.autoAnalyze,
+            autoCodeCheck: body.context?.autoCodeCheck,
+            designCode: body.context?.designCode,
+            codeCheckElements: body.context?.codeCheckElements,
+            includeReport: body.context?.includeReport,
+            reportFormat: body.context?.reportFormat,
+            reportOutput: body.context?.reportOutput,
+          },
+        });
+        return reply.send({
+          mode: 'execute',
+          result,
+        });
+      }
+
+      const result = await chatService.sendMessage({
         message: body.message,
-        mode: 'execute',
         conversationId: body.conversationId,
-        traceId: body.traceId,
-        context: {
-          model: body.context?.model,
-          modelFormat: body.context?.modelFormat,
-          analysisType: body.context?.analysisType,
-          parameters: body.context?.parameters,
-          autoAnalyze: body.context?.autoAnalyze,
-          autoCodeCheck: body.context?.autoCodeCheck,
-          designCode: body.context?.designCode,
-          codeCheckElements: body.context?.codeCheckElements,
-          includeReport: body.context?.includeReport,
-          reportFormat: body.context?.reportFormat,
-          reportOutput: body.context?.reportOutput,
-        },
+        userId,
+        context: body.context,
       });
+
       return reply.send({
-        mode: 'execute',
+        mode: 'chat',
         result,
       });
+    } catch (error) {
+      const mappedError = toLlmApiError(error);
+      if (isLlmTimeoutError(error)) {
+        request.log.warn({
+          err: error,
+          llmProvider: config.llmProvider,
+          llmModel: config.llmModel,
+          llmTimeoutMs: config.llmTimeoutMs,
+          llmMaxRetries: config.llmMaxRetries,
+        }, 'LLM request timeout in /api/v1/chat/message');
+      } else {
+        request.log.error({ err: error }, 'Unexpected error in /api/v1/chat/message');
+      }
+      return reply.code(mappedError.statusCode).send(mappedError.body);
     }
-
-    const result = await chatService.sendMessage({
-      message: body.message,
-      conversationId: body.conversationId,
-      userId,
-      context: body.context,
-    });
-
-    return reply.send({
-      mode: 'chat',
-      result,
-    });
   });
 
   // 创建会话
@@ -233,7 +251,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
       });
 
       for await (const chunk of stream) {
-        reply.raw.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        reply.raw.write(`data: ${JSON.stringify(normalizeStreamChunkError(chunk))}\n\n`);
       }
       reply.raw.write('data: [DONE]\n\n');
       reply.raw.end();
@@ -251,7 +269,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     });
 
     for await (const chunk of stream) {
-      reply.raw.write(`data: ${JSON.stringify(chunk)}\n\n`);
+      reply.raw.write(`data: ${JSON.stringify(normalizeStreamChunkError(chunk))}\n\n`);
     }
 
     reply.raw.write('data: [DONE]\n\n');
@@ -279,4 +297,29 @@ export async function chatRoutes(fastify: FastifyInstance) {
     const result = await agentService.run(body);
     return reply.send(result);
   });
+}
+
+function normalizeStreamChunkError(chunk: unknown): unknown {
+  if (!chunk || typeof chunk !== 'object') {
+    return chunk;
+  }
+
+  const value = chunk as { type?: string; error?: string; code?: string; retriable?: boolean };
+  if (value.type !== 'error' || !value.error) {
+    return chunk;
+  }
+
+  if (isLlmTimeoutError(value.error)) {
+    return {
+      ...value,
+      code: 'LLM_TIMEOUT',
+      retriable: true,
+    };
+  }
+
+  return {
+    ...value,
+    code: value.code || 'INTERNAL_ERROR',
+    retriable: value.retriable ?? false,
+  };
 }

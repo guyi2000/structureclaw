@@ -2,8 +2,11 @@ import { ChatOpenAI } from '@langchain/openai';
 import { ConversationChain } from 'langchain/chains';
 import { BufferMemory } from 'langchain/memory';
 import { PromptTemplate } from '@langchain/core/prompts';
+import { config } from '../config/index.js';
 import { createChatModel } from '../utils/llm.js';
+import { isLlmTimeoutError, toLlmApiError } from '../utils/llm-error.js';
 import { prisma } from '../utils/database.js';
+import { logger } from '../utils/logger.js';
 
 // 结构工程专用提示词
 const STRUCTURAL_ENGINEER_SYSTEM_PROMPT = `你是一位专业的建筑结构工程师和顾问，专注于结构分析、设计和规范解读。
@@ -44,6 +47,8 @@ export interface StreamChunk {
   type: 'token' | 'done' | 'error';
   content?: string;
   error?: string;
+  code?: string;
+  retriable?: boolean;
 }
 
 export class ChatService {
@@ -224,7 +229,24 @@ export class ChatService {
 
       yield { type: 'done' };
     } catch (error: any) {
-      yield { type: 'error', error: error.message };
+      const mappedError = toLlmApiError(error);
+      if (isLlmTimeoutError(error)) {
+        logger.warn({
+          err: error,
+          llmProvider: config.llmProvider,
+          llmModel: config.llmModel,
+          llmTimeoutMs: config.llmTimeoutMs,
+          llmMaxRetries: config.llmMaxRetries,
+        }, 'LLM request timeout in chat stream');
+      } else {
+        logger.error({ err: error }, 'Unexpected error in chat stream');
+      }
+      yield {
+        type: 'error',
+        error: mappedError.body.error.message,
+        code: mappedError.body.error.code,
+        retriable: mappedError.body.error.retriable,
+      };
     }
   }
 

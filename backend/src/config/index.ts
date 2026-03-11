@@ -38,8 +38,8 @@ export const config = {
   llmApiKey,
   llmModel,
   llmBaseUrl,
-  llmTimeoutMs: parseInt(process.env.LLM_TIMEOUT_MS || '20000', 10),
-  llmMaxRetries: parseInt(process.env.LLM_MAX_RETRIES || '1', 10),
+  llmTimeoutMs: parseInt(process.env.LLM_TIMEOUT_MS || '90000', 10),
+  llmMaxRetries: parseInt(process.env.LLM_MAX_RETRIES || '0', 10),
 
   // 兼容保留：旧 OpenAI 字段
   openaiApiKey: process.env.OPENAI_API_KEY || '',
