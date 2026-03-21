@@ -1084,6 +1084,7 @@ export class AgentService {
         this.completeToolCallSuccess(reportCall, report);
       }
 
+      const analysisResultData = analyzed.data?.success ? (analyzed.data as Record<string, unknown>)['data'] : undefined;
       const response = await this.renderSummary(
         params.message,
         this.localize(
@@ -1096,6 +1097,8 @@ export class AgentService {
             + (validationWarning ? `, validation_warning=true` : '')
         ),
         locale,
+        analysisResultData,
+        sessionKey,
       );
 
       const result: AgentRunResult = {
@@ -1828,18 +1831,56 @@ export class AgentService {
     return artifacts;
   }
 
-  private async renderSummary(message: string, fallback: string, locale: AppLocale): Promise<string> {
+  private async renderSummary(message: string, fallback: string, locale: AppLocale, analysisData?: unknown, conversationId?: string): Promise<string> {
     if (!this.llm) {
       return fallback;
     }
 
     try {
-      const prompt = [
+      const hasData = analysisData && typeof analysisData === 'object';
+      let conversationContext = '';
+      if (conversationId) {
+        try {
+          const recentMessages = await prisma.message.findMany({
+            where: { conversationId },
+            orderBy: { createdAt: 'desc' },
+            take: 6,
+            select: { role: true, content: true },
+          });
+          if (recentMessages.length > 0) {
+            conversationContext = recentMessages
+              .reverse()
+              .map(m => `${m.role}: ${m.content.slice(0, 200)}`)
+              .join('\n');
+          }
+        } catch {
+          // Non-blocking: proceed without conversation context.
+        }
+      }
+      const promptParts = [
         this.localize(locale, '你是结构工程 Agent 的结果解释器。', 'You explain results produced by the structural engineering agent.'),
-        this.localize(locale, '请用中文在 80 字以内给出结论，不要杜撰未出现的数据。', 'Respond in English within 80 words and do not invent data that was not provided.'),
+        hasData
+          ? this.localize(locale, '请用中文在 250 字以内，根据用户意图从分析数据中提取用户关心的结果并回答。只引用数据中存在的数值，不要杜撰。若用户询问的数据未在当前分析数据中提供，请明确说明，并引导用户查看结构化数据结果与可视化界面。', 'Respond in English within 250 words. Extract and present the results the user cares about from the analysis data. Only cite values present in the data; do not invent data. If the requested value is not available in the current analysis data, say so clearly and direct the user to the structured results and visualization view.')
+          : this.localize(locale, '请用中文在 80 字以内给出结论，不要杜撰未出现的数据。', 'Respond in English within 80 words and do not invent data that was not provided.'),
+      ];
+      if (conversationContext) {
+        promptParts.push(this.localize(locale, `对话上下文：\n${conversationContext}`, `Conversation context:\n${conversationContext}`));
+      }
+      promptParts.push(
         this.localize(locale, `用户意图：${message}`, `User intent: ${message}`),
         this.localize(locale, `系统结果：${fallback}`, `System result: ${fallback}`),
-      ].join('\n');
+      );
+      if (hasData) {
+        const dataObj = analysisData as Record<string, unknown>;
+        const compact = JSON.stringify({
+          analysisMode: dataObj['analysisMode'] ?? null,
+          plane: dataObj['plane'] ?? null,
+          summary: dataObj['summary'] ?? null,
+          envelope: dataObj['envelope'] ?? null,
+        });
+        promptParts.push(this.localize(locale, `分析数据：${compact}`, `Analysis data: ${compact}`));
+      }
+      const prompt = promptParts.join('\n');
       const aiMessage = await this.llm.invoke(prompt);
       const content = typeof aiMessage.content === 'string'
         ? aiMessage.content
