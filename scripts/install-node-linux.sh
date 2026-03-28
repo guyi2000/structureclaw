@@ -43,7 +43,10 @@ fi
 
 echo "Installing nvm..."
 echo "正在安装 nvm..."
-curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+NVM_INSTALL_SCRIPT="$(mktemp)"
+trap 'rm -f "${NVM_INSTALL_SCRIPT}"' EXIT
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh -o "${NVM_INSTALL_SCRIPT}"
+bash "${NVM_INSTALL_SCRIPT}"
 
 NVM_DIR="${HOME}/.nvm"
 if [ ! -s "${NVM_DIR}/nvm.sh" ]; then
@@ -57,8 +60,16 @@ fi
 
 echo "Installing Node.js ${TARGET_NODE_VERSION} via nvm..."
 echo "通过 nvm 安装 Node.js ${TARGET_NODE_VERSION}..."
-nvm install "${TARGET_NODE_VERSION}"
-nvm alias default "${TARGET_NODE_VERSION}"
+if ! nvm install "${TARGET_NODE_VERSION}"; then
+  echo "Failed to install Node.js ${TARGET_NODE_VERSION} with nvm."
+  echo "通过 nvm 安装 Node.js ${TARGET_NODE_VERSION} 失败。"
+  exit 1
+fi
+if ! nvm alias default "${TARGET_NODE_VERSION}"; then
+  echo "Failed to set default Node.js version to ${TARGET_NODE_VERSION}."
+  echo "设置默认 Node.js 版本为 ${TARGET_NODE_VERSION} 失败。"
+  exit 1
+fi
 
 echo "Done. Current Node.js version: $(node -v)"
 echo "完成。当前 Node.js 版本：$(node -v)"

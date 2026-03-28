@@ -41,6 +41,11 @@ if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
 Write-Host "Installing nvm-windows with winget..."
 Write-Host "正在通过 winget 安装 nvm-windows..."
 winget install -e --id CoreyButler.NVMforWindows --accept-source-agreements --accept-package-agreements
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "Failed to install nvm-windows via winget (exit code: $LASTEXITCODE)."
+  Write-Host "通过 winget 安装 nvm-windows 失败（退出码：$LASTEXITCODE）。"
+  exit $LASTEXITCODE
+}
 
 $nvmExe = "$env:ProgramFiles\nvm\nvm.exe"
 if (-not (Test-Path $nvmExe)) {
@@ -57,7 +62,17 @@ if (-not (Test-Path $nvmExe)) {
 Write-Host "Installing Node.js $TargetNodeVersion via nvm..."
 Write-Host "通过 nvm 安装 Node.js $TargetNodeVersion..."
 & $nvmExe install $TargetNodeVersion
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "Failed to install Node.js $TargetNodeVersion via nvm (exit code: $LASTEXITCODE)."
+  Write-Host "通过 nvm 安装 Node.js $TargetNodeVersion 失败（退出码：$LASTEXITCODE）。"
+  exit $LASTEXITCODE
+}
 & $nvmExe use $TargetNodeVersion
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "Failed to activate Node.js $TargetNodeVersion via nvm (exit code: $LASTEXITCODE)."
+  Write-Host "通过 nvm 切换到 Node.js $TargetNodeVersion 失败（退出码：$LASTEXITCODE）。"
+  exit $LASTEXITCODE
+}
 
 if (Get-Command node -ErrorAction SilentlyContinue) {
   Write-Host "Done. Current Node.js version: $(node -v)"

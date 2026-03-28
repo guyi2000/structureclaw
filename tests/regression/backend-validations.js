@@ -1647,13 +1647,13 @@ async function validateDevStartupGuards(context) {
     "missing nvm-windows installer hook for Windows",
   );
   assert(
-    readmeContent.includes("scripts/install-node-linux.sh")
-      && readmeContent.includes("scripts\\install-node-windows.ps1"),
+    readmeContent.includes("./scripts/install-node-linux.sh")
+      && readmeContent.includes("./scripts/install-node-windows.ps1"),
     "README should document Linux and Windows Node installer scripts",
   );
   assert(
-    readmeCnContent.includes("scripts/install-node-linux.sh")
-      && readmeCnContent.includes("scripts\\install-node-windows.ps1"),
+    readmeCnContent.includes("./scripts/install-node-linux.sh")
+      && readmeCnContent.includes("./scripts/install-node-windows.ps1"),
     "README_CN should document Linux and Windows Node installer scripts",
   );
   console.log("[ok] unified startup and docker command guards are present");
