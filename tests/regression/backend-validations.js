@@ -1587,6 +1587,21 @@ async function validateReportTemplateContract(context) {
 async function validateDevStartupGuards(context) {
   const cliMainPath = path.join(context.rootDir, "scripts", "cli", "main.js");
   const cliMainContent = await fsp.readFile(cliMainPath, "utf8");
+  const linuxNodeInstallerPath = path.join(context.rootDir, "scripts", "install-node-linux.sh");
+  const windowsNodeInstallerPath = path.join(context.rootDir, "scripts", "install-node-windows.ps1");
+  const readmePath = path.join(context.rootDir, "README.md");
+  const readmeCnPath = path.join(context.rootDir, "README_CN.md");
+  const [
+    linuxNodeInstallerContent,
+    windowsNodeInstallerContent,
+    readmeContent,
+    readmeCnContent,
+  ] = await Promise.all([
+    fsp.readFile(linuxNodeInstallerPath, "utf8"),
+    fsp.readFile(windowsNodeInstallerPath, "utf8"),
+    fsp.readFile(readmePath, "utf8"),
+    fsp.readFile(readmeCnPath, "utf8"),
+  ]);
   const runtimePaths = runtime.resolvePaths(context.rootDir);
 
   console.log("Validating unified startup and docker command guards...");
@@ -1622,6 +1637,24 @@ async function validateDevStartupGuards(context) {
       path.join("backend", "src", "agent-skills", "analysis", "runtime", "requirements.txt"),
     ),
     "analysis requirements path is not aligned with the current runtime layout",
+  );
+  assert(
+    linuxNodeInstallerContent.includes("nvm install"),
+    "missing nvm-based Node auto installer for Linux",
+  );
+  assert(
+    windowsNodeInstallerContent.includes("CoreyButler.NVMforWindows"),
+    "missing nvm-windows installer hook for Windows",
+  );
+  assert(
+    readmeContent.includes("scripts/install-node-linux.sh")
+      && readmeContent.includes("scripts\\install-node-windows.ps1"),
+    "README should document Linux and Windows Node installer scripts",
+  );
+  assert(
+    readmeCnContent.includes("scripts/install-node-linux.sh")
+      && readmeCnContent.includes("scripts\\install-node-windows.ps1"),
+    "README_CN should document Linux and Windows Node installer scripts",
   );
   console.log("[ok] unified startup and docker command guards are present");
 }
