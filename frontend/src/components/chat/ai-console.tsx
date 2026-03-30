@@ -213,20 +213,20 @@ type SkillDomain =
   | 'unknown'
 
 const ALL_SKILL_DOMAINS: SkillDomain[] = [
-  'analysis',
-  'code-check',
   'data-input',
-  'design',
-  'drawing',
-  'general',
-  'load-boundary',
-  'material',
-  'report-export',
-  'result-postprocess',
-  'section',
   'structure-type',
+  'material',
+  'section',
+  'load-boundary',
+  'analysis',
+  'result-postprocess',
+  'design',
+  'code-check',
   'validation',
+  'report-export',
+  'drawing',
   'visualization',
+  'general',
 ]
 
 type CapabilitySkillSummary = {
@@ -303,6 +303,7 @@ function resolveSkillDomainLabel(domain: SkillDomain, t: (key: MessageKey) => st
 }
 
 const STORAGE_KEY = 'structureclaw.console.conversations'
+const DEFAULT_PRELOADED_SKILL_IDS = ['opensees-static'] as const
 
 function createId(prefix: string) {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -1194,7 +1195,7 @@ export function AIConsole() {
   const [isSending, setIsSending] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [skillsOpen, setSkillsOpen] = useState(false)
-  const [skillHubOpen, setSkillHubOpen] = useState(true)
+  const [skillHubOpen, setSkillHubOpen] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
   const [modelText, setModelText] = useState('')
   const [modelSyncMessage, setModelSyncMessage] = useState('')
@@ -1279,8 +1280,8 @@ export function AIConsole() {
   const defaultSelectedSkillIds = useMemo(
     () => availableSkills
       .map((skill) => skill.id)
-      .filter((skillId) => skillDomainById[skillId] === 'analysis'),
-    [availableSkills, skillDomainById]
+      .filter((skillId) => DEFAULT_PRELOADED_SKILL_IDS.includes(skillId as typeof DEFAULT_PRELOADED_SKILL_IDS[number])),
+    [availableSkills]
   )
 
   const groupedSkills = useMemo(() => {
@@ -1343,6 +1344,49 @@ export function AIConsole() {
   const visibleGroupedSkills = useMemo(() => {
     return groupedSkills.filter((group) => group.domain === skillDomainView)
   }, [groupedSkills, skillDomainView])
+
+  const skillHubCatalogById = useMemo(() => {
+    return new Map(skillHubCatalog.map((item) => [item.id, item]))
+  }, [skillHubCatalog])
+
+  const loadedModules = useMemo(() => {
+    const localItems = availableSkills
+      .filter((skill) => selectedSkillIds.includes(skill.id))
+      .map((skill) => ({
+        id: skill.id,
+        domain: skillDomainById[skill.id] || 'unknown',
+        label: locale === 'zh' ? (skill.name.zh || skill.id) : (skill.name.en || skill.id),
+        source: 'local' as const,
+      }))
+
+    const skillHubItems = Object.values(skillHubInstalledById)
+      .filter((item) => item?.id && item.enabled)
+      .map((item) => {
+        const catalogItem = skillHubCatalogById.get(item.id)
+        return {
+          id: item.id,
+          domain: normalizeSkillDomain(catalogItem?.domain),
+          label: locale === 'zh'
+            ? (catalogItem?.name?.zh || item.id)
+            : (catalogItem?.name?.en || item.id),
+          source: 'skillhub' as const,
+        }
+      })
+
+    const domainOrder = new Map(ALL_SKILL_DOMAINS.map((domain, index) => [domain, index]))
+
+    return [...localItems, ...skillHubItems].sort((a, b) => {
+      const left = domainOrder.get(a.domain) ?? Number.MAX_SAFE_INTEGER
+      const right = domainOrder.get(b.domain) ?? Number.MAX_SAFE_INTEGER
+      if (left !== right) {
+        return left - right
+      }
+      if (a.source !== b.source) {
+        return a.source === 'local' ? -1 : 1
+      }
+      return a.label.localeCompare(b.label)
+    })
+  }, [availableSkills, locale, selectedSkillIds, skillDomainById, skillHubCatalogById, skillHubInstalledById])
 
   useEffect(() => {
     if (!groupedSkills.some((group) => group.domain === skillDomainView)) {
@@ -1465,7 +1509,9 @@ export function AIConsole() {
         }
         const skills = payload as AgentSkillSummary[]
         setAvailableSkills(skills)
-        const defaultSkillIds = skills.filter((skill) => skill.autoLoadByDefault).map((skill) => skill.id)
+        const defaultSkillIds = skills
+          .map((skill) => skill.id)
+          .filter((skillId) => DEFAULT_PRELOADED_SKILL_IDS.includes(skillId as typeof DEFAULT_PRELOADED_SKILL_IDS[number]))
         setSelectedSkillIds((current) => (current.length > 0 ? current : defaultSkillIds))
       } catch {
         if (active) {
@@ -2523,7 +2569,7 @@ export function AIConsole() {
   return (
     <div
       data-testid="console-layout-grid"
-      className="grid min-h-[calc(100vh-5.5rem)] gap-4 xl:h-[calc(100vh-5.5rem)] xl:min-h-0 xl:grid-cols-[280px_minmax(0,1.3fr)_420px] xl:overflow-hidden"
+      className="grid min-h-[calc(100vh-5.5rem)] gap-4 xl:h-[calc(100vh-5.5rem)] xl:min-h-0 xl:grid-cols-[300px_minmax(0,1.7fr)_460px] xl:overflow-hidden 2xl:grid-cols-[320px_minmax(0,1.9fr)_500px]"
     >
       <aside
         data-testid="console-history-panel"
@@ -2676,10 +2722,10 @@ export function AIConsole() {
                 </Badge>
               </div>
             </div>
-            <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
+            <p className="mt-3 max-w-5xl text-sm leading-6 text-muted-foreground">
               {t('aiConsoleIntro')}
             </p>
-            <div className="mt-4 max-w-3xl rounded-[22px] border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground dark:border-white/10 dark:bg-white/5">
+            <div className="mt-4 max-w-5xl rounded-[22px] border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground dark:border-white/10 dark:bg-white/5">
               <div className="font-medium text-foreground">{t('databaseAdminConsoleCardTitle')}</div>
               <div className="mt-1 leading-6">{t('databaseAdminConsoleCardBody')}</div>
             </div>
@@ -2690,7 +2736,7 @@ export function AIConsole() {
             data-testid="console-chat-scroll"
             className="flex-1 overflow-auto px-5 py-5 xl:min-h-0"
           >
-            <div className="mx-auto flex max-w-4xl flex-col gap-4">
+            <div className="flex w-full flex-col gap-4">
               {messages.length === 1 && (
                 <div className="grid gap-3 md:grid-cols-3">
                   {quickPrompts.map((prompt) => (
@@ -2894,7 +2940,7 @@ export function AIConsole() {
           </div>
 
           <div data-testid="console-composer" className="border-t border-border/70 px-4 py-3 dark:border-white/10">
-            <div className="mx-auto max-w-4xl space-y-3">
+            <div className="w-full space-y-3">
               {errorMessage && (
                 <div className="rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
                   {errorMessage}
@@ -2922,8 +2968,37 @@ export function AIConsole() {
                   </div>
 
                   {skillsOpen && (
-                    <div className="mt-3 space-y-3">
+                    <div className="mt-3 max-h-[min(48vh,32rem)] space-y-3 overflow-y-auto pr-1 overscroll-contain">
                       <p className="text-xs text-muted-foreground">{t('skillSelectionCatalogHint')}</p>
+                      <div className="rounded-2xl border border-border/70 bg-background/60 p-2.5 dark:border-white/10 dark:bg-slate-950/30">
+                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <p className="text-xs font-medium text-foreground">{t('loadedModulesTitle')}</p>
+                            <p className="text-xs text-muted-foreground">{t('loadedModulesHint')}</p>
+                          </div>
+                          <Badge variant="outline" className="text-[10px]">
+                            {loadedModules.length}
+                          </Badge>
+                        </div>
+                        {loadedModules.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">{t('loadedModulesEmpty')}</p>
+                        ) : (
+                          <div className="flex flex-wrap gap-2">
+                            {loadedModules.map((module) => (
+                              <div
+                                key={`${module.source}:${module.id}`}
+                                className="flex items-center gap-2 rounded-full border border-border/70 bg-background/70 px-3 py-1.5 text-xs dark:border-white/10 dark:bg-black/20"
+                              >
+                                <span className="font-medium text-foreground">{module.label}</span>
+                                <span className="text-muted-foreground">{resolveSkillDomainLabel(module.domain, t)}</span>
+                                <Badge variant="outline" className="text-[10px]">
+                                  {module.source === 'local' ? t('loadedModulesSourceLocal') : t('loadedModulesSourceSkillHub')}
+                                </Badge>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <label className="text-xs font-medium text-foreground" htmlFor="skill-domain-view-select">{t('skillSelectionDomainViewLabel')}</label>
                         <select
