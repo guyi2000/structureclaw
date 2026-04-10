@@ -6,6 +6,12 @@ function assert(condition, message) {
   }
 }
 
+function assertStringSetMatch(actual, expected, path) {
+  const actualValues = Array.isArray(actual) ? [...actual].sort() : [];
+  const expectedValues = Array.isArray(expected) ? [...expected].sort() : [];
+  assertMatch(actualValues, expectedValues, path);
+}
+
 /**
  * Compare actual against expected with binary pass/fail tolerance.
  * - Numbers: within ±5%
@@ -143,6 +149,50 @@ function applyCriticalMissingAssertions(actualMissing, expected) {
   }
 }
 
+/**
+ * Assert routing trace matches expectations.
+ * @param {object} actual - The observed routing trace
+ * @param {object} expected - Expected values
+ */
+function assertRoutingTrace(actual = {}, expected = {}) {
+  if (expected.selectedSkillIds) {
+    assertStringSetMatch(actual.selectedSkillIds || [], expected.selectedSkillIds, "routing.selectedSkillIds");
+  }
+  if (expected.activatedSkillIdsIncludes) {
+    for (const skillId of expected.activatedSkillIdsIncludes) {
+      assert(
+        (actual.activatedSkillIds || []).includes(skillId),
+        `expected activated skill "${skillId}" in [${(actual.activatedSkillIds || []).join(", ")}]`
+      );
+    }
+  }
+  if (expected.structuralSkillId) {
+    assert(
+      actual.structuralSkillId === expected.structuralSkillId,
+      `expected structuralSkillId="${expected.structuralSkillId}", got "${actual.structuralSkillId}"`
+    );
+  }
+  if (expected.analysisSkillId) {
+    assert(
+      actual.analysisSkillId === expected.analysisSkillId,
+      `expected analysisSkillId="${expected.analysisSkillId}", got "${actual.analysisSkillId}"`
+    );
+  }
+}
+
+/**
+ * Assert tool authorizers match expectations.
+ * @param {Array} toolCalls - Observed tool calls
+ * @param {object} expectedAuthorizers - Expected authorizers per tool
+ */
+function assertToolAuthorizers(toolCalls, expectedAuthorizers = {}) {
+  for (const [toolId, expectedSkills] of Object.entries(expectedAuthorizers)) {
+    const call = toolCalls.find((item) => item.tool === toolId);
+    assert(call, `expected tool call "${toolId}" to exist`);
+    assertStringSetMatch(call.authorizedBySkillIds || [], expectedSkills, `toolAuthorizers.${toolId}`);
+  }
+}
+
 module.exports = {
   assert,
   assertMatch,
@@ -150,4 +200,6 @@ module.exports = {
   assertCriticalMissing,
   assertNotCriticalMissing,
   applyCriticalMissingAssertions,
+  assertRoutingTrace,
+  assertToolAuthorizers,
 };
