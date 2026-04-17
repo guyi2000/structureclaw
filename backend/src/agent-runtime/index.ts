@@ -1,6 +1,9 @@
 import { ChatOpenAI } from '@langchain/openai';
 import type { AppLocale } from '../services/locale.js';
 import { buildReportDomainArtifacts } from '../agent-skills/report-export/entry.js';
+import { buildPostprocessedResultArtifact } from '../agent-skills/result-postprocess/entry.js';
+import { computeDependencyFingerprint, computeDraftStateContentHash } from './artifact-helpers.js';
+import { applyPatches, type PatchReducerInput } from './patch-reducer.js';
 import {
   buildCodeCheckInput,
   executeCodeCheckDomain,
@@ -20,10 +23,15 @@ import {
 } from './skill-manifest-loader.js';
 import type {
   AgentSkillBundle,
+  ArtifactEnvelope,
+  ArtifactKind,
   DraftParameterExtractionResult,
   DraftResult,
   DraftState,
   InteractionQuestion,
+  ProjectPipelineState,
+  RunRecord,
+  SchedulerStep,
   SkillDefaultProposal,
   StructuralTypeMatch,
   SkillReportNarrativeInput,
@@ -31,6 +39,7 @@ import type {
   StructuralTypeKey,
   SkillManifest,
   ToolManifest,
+  ModelPatchRecord,
 } from './types.js';
 
 export type {
@@ -362,7 +371,12 @@ export class AgentSkillRuntime {
       clauseTraceability,
       controllingCases,
       visualizationHints,
-    } = buildReportDomainArtifacts(options.analysis, options.codeCheck);
+    } = buildReportDomainArtifacts({
+      designBasis: undefined,
+      normalizedModel: undefined,
+      postprocessedResult: options.analysis,
+      codeCheckResult: options.codeCheck,
+    });
     const jsonReport: Record<string, unknown> = {
       reportSchemaVersion: '1.0.0',
       intent: options.message,
@@ -680,5 +694,488 @@ export class AgentSkillRuntime {
       return plugin.handler.buildReportNarrative(input);
     }
     return buildDefaultReportNarrative(input);
+  }
+
+  async executeScheduledStep(args: {
+    step: SchedulerStep;
+    pipelineState: ProjectPipelineState;
+    traceId: string;
+    locale: AppLocale;
+    postToEngineWithRetry: (
+      path: string,
+      input: Record<string, unknown>,
+      retryOptions: { retries: number; traceId: string; tool: 'run_analysis' },
+    ) => Promise<{ data: unknown }>;
+    codeCheckClient: unknown;
+    structureProtocolClient?: { post: (path: string, payload: Record<string, unknown>) => Promise<{ data: unknown }> };
+    message?: string;
+    llm?: ChatOpenAI | null;
+    draftState?: DraftState;
+    skillIds?: string[];
+    engineId?: string;
+    analysisParameters?: Record<string, unknown>;
+  }): Promise<{ artifact?: ArtifactEnvelope; runRecord?: RunRecord; draftMeta?: { structuralTypeMatch?: StructuralTypeMatch; nextState?: DraftState } }> {
+    switch (args.step.tool) {
+      case 'validate_model':
+        return this.executeValidationScheduledStep(args);
+      case 'run_analysis':
+        return this.executeAnalysisScheduledStep(args);
+      case 'postprocess_result':
+        return this.executePostprocessScheduledStep(args);
+      case 'run_code_check':
+        return this.executeCodeCheckScheduledStep(args);
+      case 'generate_report':
+        return this.executeReportScheduledStep(args);
+      case 'generate_drawing':
+        return this.executeDrawingScheduledStep(args);
+      case 'update_model':
+        return this.executeUpdateScheduledStep(args);
+      case 'convert_model':
+        return this.executeConvertScheduledStep(args);
+      case 'synthesize_design':
+        return this.executeDesignScheduledStep(args);
+      case 'draft_model':
+        return this.executeDraftScheduledStep(args);
+      case 'enrich_model':
+        return this.executeEnrichScheduledStep(args);
+      default:
+        throw new Error(`Unsupported scheduled tool: ${args.step.tool}`);
+    }
+  }
+
+  private async executeValidationScheduledStep(args: {
+    step: SchedulerStep;
+    pipelineState: ProjectPipelineState;
+    traceId: string;
+    locale: AppLocale;
+    postToEngineWithRetry: (path: string, input: Record<string, unknown>, retryOptions: { retries: number; traceId: string; tool: 'run_analysis' }) => Promise<{ data: unknown }>;
+    codeCheckClient: unknown;
+    engineId?: string;
+    structureProtocolClient?: { post: (path: string, payload: Record<string, unknown>) => Promise<{ data: unknown }> };
+  }): Promise<{ artifact?: ArtifactEnvelope; runRecord?: RunRecord }> {
+    const model = args.pipelineState.artifacts.normalizedModel?.payload as Record<string, unknown> ?? {};
+    // Prefer the explicitly-provided structureProtocolClient (used by agent.ts);
+    // fall back to wrapping postToEngineWithRetry for backwards compatibility.
+    const validationClient = args.structureProtocolClient ?? {
+      post: (path: string, payload: Record<string, unknown>) =>
+        args.postToEngineWithRetry(path, payload, { retries: 3, traceId: args.traceId, tool: 'run_analysis' }),
+    };
+    const result = await this.executeValidationSkill({
+      model,
+      engineId: args.engineId,
+      structureProtocolClient: validationClient,
+    });
+    if (!args.step.provides) return {};
+    const artifact = this.buildArtifactEnvelope(args.step.provides, result.result, args.step, args.pipelineState);
+    return { artifact };
+  }
+
+  private async executeAnalysisScheduledStep(args: {
+    step: SchedulerStep;
+    pipelineState: ProjectPipelineState;
+    traceId: string;
+    locale: AppLocale;
+    postToEngineWithRetry: (path: string, input: Record<string, unknown>, retryOptions: { retries: number; traceId: string; tool: 'run_analysis' }) => Promise<{ data: unknown }>;
+    codeCheckClient: unknown;
+    skillIds?: string[];
+    engineId?: string;
+  }): Promise<{ artifact?: ArtifactEnvelope; runRecord?: RunRecord }> {
+    const model = args.pipelineState.artifacts.analysisModel?.payload as Record<string, unknown> ?? {};
+    const analysisType = args.pipelineState.policy?.analysisType ?? 'static';
+    const result = await this.executeAnalysisSkill({
+      model,
+      analysisType,
+      postToEngineWithRetry: args.postToEngineWithRetry,
+      traceId: args.traceId,
+      engineId: args.engineId,
+      parameters: {},
+      skillIds: args.skillIds,
+    });
+    if (!args.step.provides) return {};
+    const artifact = this.buildArtifactEnvelope(args.step.provides, result.result, args.step, args.pipelineState);
+    return { artifact };
+  }
+
+  private async executePostprocessScheduledStep(args: {
+    step: SchedulerStep;
+    pipelineState: ProjectPipelineState;
+    traceId: string;
+    locale: AppLocale;
+    postToEngineWithRetry: (path: string, input: Record<string, unknown>, retryOptions: { retries: number; traceId: string; tool: 'run_analysis' }) => Promise<{ data: unknown }>;
+    codeCheckClient: unknown;
+  }): Promise<{ artifact?: ArtifactEnvelope; runRecord?: RunRecord }> {
+    const analysisPayload = args.pipelineState.artifacts.analysisRaw?.payload;
+    const analysisRawRef = args.pipelineState.artifacts.analysisRaw
+      ? { artifactId: args.pipelineState.artifacts.analysisRaw.artifactId, revision: args.pipelineState.artifacts.analysisRaw.revision }
+      : undefined;
+    const postprocessedResult = buildPostprocessedResultArtifact(analysisPayload, analysisRawRef);
+    if (!args.step.provides) return {};
+    const artifact = this.buildArtifactEnvelope(args.step.provides, postprocessedResult as unknown as Record<string, unknown>, args.step, args.pipelineState);
+    return { artifact };
+  }
+
+  private async executeCodeCheckScheduledStep(args: {
+    step: SchedulerStep;
+    pipelineState: ProjectPipelineState;
+    traceId: string;
+    locale: AppLocale;
+    postToEngineWithRetry: (path: string, input: Record<string, unknown>, retryOptions: { retries: number; traceId: string; tool: 'run_analysis' }) => Promise<{ data: unknown }>;
+    codeCheckClient: unknown;
+    engineId?: string;
+    analysisParameters?: Record<string, unknown>;
+  }): Promise<{ artifact?: ArtifactEnvelope; runRecord?: RunRecord }> {
+    const model = args.pipelineState.artifacts.normalizedModel?.payload as Record<string, unknown> ?? {};
+    const analysis = args.pipelineState.artifacts.analysisRaw?.payload;
+    const postprocessedPayload = args.pipelineState.artifacts.postprocessedResult?.payload;
+    const designCode = args.pipelineState.policy?.designCode ?? 'GB50017';
+    const codeCheckInput = buildCodeCheckInput({
+      traceId: args.traceId,
+      designCode,
+      model,
+      analysis,
+      analysisParameters: args.analysisParameters ?? {},
+      postprocessedResult: postprocessedPayload as Record<string, unknown> | undefined,
+    });
+    // Inject engineId into the code-check input payload
+    if (args.engineId) {
+      (codeCheckInput as Record<string, unknown>).engineId = args.engineId;
+    }
+    const skillId = this.resolveCodeCheckSkillId(designCode);
+    const result = await executeCodeCheckDomain(args.codeCheckClient as CodeCheckClient, codeCheckInput, args.engineId);
+    if (result && typeof result === 'object' && skillId) {
+      const payload = result as Record<string, unknown>;
+      const existingMeta = payload.meta && typeof payload.meta === 'object'
+        ? payload.meta as Record<string, unknown>
+        : {};
+      payload.meta = { ...existingMeta, codeCheckSkillId: skillId };
+    }
+    if (!args.step.provides) return {};
+    const artifact = this.buildArtifactEnvelope(args.step.provides, result as Record<string, unknown>, args.step, args.pipelineState);
+    return { artifact };
+  }
+
+  private async executeReportScheduledStep(args: {
+    step: SchedulerStep;
+    pipelineState: ProjectPipelineState;
+    traceId: string;
+    locale: AppLocale;
+    postToEngineWithRetry: (path: string, input: Record<string, unknown>, retryOptions: { retries: number; traceId: string; tool: 'run_analysis' }) => Promise<{ data: unknown }>;
+    codeCheckClient: unknown;
+    message?: string;
+    draftState?: DraftState;
+    skillIds?: string[];
+  }): Promise<{ artifact?: ArtifactEnvelope; runRecord?: RunRecord }> {
+    const analysisPayload = args.pipelineState.artifacts.analysisRaw?.payload;
+    const codeCheckPayload = args.pipelineState.artifacts.codeCheckResult?.payload;
+    if (!args.step.provides) return {};
+
+    // Delegate to executeReportSkill for full report (summary, markdown, meta)
+    // Prefer pipelineState.policy.analysisType (same source used by scheduled analysis execution).
+    // Fall back to designBasis.payload.analysisType for backwards compatibility, then 'static'.
+    const analysisType = args.pipelineState.policy?.analysisType
+      ?? (args.pipelineState.artifacts.designBasis?.payload as Record<string, unknown> | undefined)?.analysisType as 'static' | 'dynamic' | 'seismic' | 'nonlinear' | undefined
+      ?? 'static';
+    const reportResult = await this.executeReportSkill({
+      message: args.message ?? '',
+      analysisType,
+      analysis: analysisPayload,
+      codeCheck: codeCheckPayload,
+      format: 'both',
+      locale: args.locale,
+      draft: args.draftState,
+      skillIds: args.skillIds,
+    });
+    const artifact = this.buildArtifactEnvelope(args.step.provides, reportResult.report, args.step, args.pipelineState);
+    return { artifact };
+  }
+
+  private async executeDrawingScheduledStep(_args: {
+    step: SchedulerStep;
+    pipelineState: ProjectPipelineState;
+    traceId: string;
+    locale: AppLocale;
+    postToEngineWithRetry: (path: string, input: Record<string, unknown>, retryOptions: { retries: number; traceId: string; tool: 'run_analysis' }) => Promise<{ data: unknown }>;
+    codeCheckClient: unknown;
+  }): Promise<{ artifact?: ArtifactEnvelope; runRecord?: RunRecord }> {
+    throw new Error('generate_drawing not yet implemented');
+  }
+
+  private async executeUpdateScheduledStep(args: {
+    step: SchedulerStep;
+    pipelineState: ProjectPipelineState;
+    traceId: string;
+    locale: AppLocale;
+    postToEngineWithRetry: (path: string, input: Record<string, unknown>, retryOptions: { retries: number; traceId: string; tool: 'run_analysis' }) => Promise<{ data: unknown }>;
+    codeCheckClient: unknown;
+    message?: string;
+    llm?: ChatOpenAI | null;
+    draftState?: DraftState;
+    skillIds?: string[];
+  }): Promise<{ artifact?: ArtifactEnvelope; runRecord?: RunRecord; draftMeta?: { structuralTypeMatch?: StructuralTypeMatch; nextState?: DraftState } }> {
+    if (!args.step.provides) return {};
+
+    // designBasis update: build from session resolved config
+    if (args.step.provides === 'designBasis') {
+      const payload: Record<string, unknown> = {
+        source: 'session-inferred',
+        createdAt: new Date().toISOString(),
+      };
+      const artifact = this.buildArtifactEnvelope(args.step.provides, payload, args.step, args.pipelineState);
+      return { artifact };
+    }
+
+    // normalizedModel update: draft or update the structural model
+    if (args.step.provides === 'normalizedModel') {
+      if (!args.message || !args.draftState) {
+        // No draft context — return existing artifact if present
+        const existing = args.pipelineState.artifacts.normalizedModel;
+        if (existing) return { artifact: existing };
+        // Cannot produce model without draft context
+        throw new Error('normalizedModel update requires message and draftState');
+      }
+
+      const extraction = await this.extractDraftParameters(
+        args.llm ?? null,
+        args.message,
+        args.draftState,
+        args.locale,
+        args.skillIds,
+      );
+
+      if (extraction.missing.critical.length > 0) {
+        throw new Error(`DRAFT_INCOMPLETE:${extraction.missing.critical.join(',')}`);
+      }
+
+      const draftResult = await this.buildModelFromDraft(
+        args.llm ?? null,
+        args.message,
+        extraction,
+        args.locale,
+      );
+
+      if (!draftResult.model) {
+        throw new Error('DRAFT_INCOMPLETE:model build failed');
+      }
+
+      const artifact = this.buildArtifactEnvelope(
+        args.step.provides,
+        draftResult.model,
+        args.step,
+        args.pipelineState,
+        args.draftState,
+      );
+      return {
+        artifact,
+        draftMeta: {
+          structuralTypeMatch: extraction.structuralTypeMatch,
+          nextState: extraction.nextState,
+        },
+      };
+    }
+
+    // Generic update: return existing
+    const existing = args.pipelineState.artifacts[args.step.provides as keyof typeof args.pipelineState.artifacts];
+    return { artifact: existing };
+  }
+
+  private async executeConvertScheduledStep(args: {
+    step: SchedulerStep;
+    pipelineState: ProjectPipelineState;
+    traceId: string;
+    locale: AppLocale;
+    postToEngineWithRetry: (path: string, input: Record<string, unknown>, retryOptions: { retries: number; traceId: string; tool: 'run_analysis' }) => Promise<{ data: unknown }>;
+    codeCheckClient: unknown;
+  }): Promise<{ artifact?: ArtifactEnvelope; runRecord?: RunRecord }> {
+    // Convert produces analysisModel from normalizedModel
+    const normalizedModel = args.pipelineState.artifacts.normalizedModel?.payload as Record<string, unknown> ?? {};
+    if (!args.step.provides) return {};
+    // For internally-produced models (structuremodel-v1), the normalizedModel IS the analysis model.
+    // External format conversion is handled by the convert_model tool before entering the pipeline.
+    const artifact = this.buildArtifactEnvelope(args.step.provides, normalizedModel, args.step, args.pipelineState);
+    return { artifact };
+  }
+
+  private async executeDesignScheduledStep(_args: {
+    step: SchedulerStep;
+    pipelineState: ProjectPipelineState;
+    traceId: string;
+    locale: AppLocale;
+    postToEngineWithRetry: (path: string, input: Record<string, unknown>, retryOptions: { retries: number; traceId: string; tool: 'run_analysis' }) => Promise<{ data: unknown }>;
+    codeCheckClient: unknown;
+  }): Promise<{ artifact?: ArtifactEnvelope; runRecord?: RunRecord }> {
+    throw new Error('synthesize_design not yet implemented');
+  }
+
+  private async executeDraftScheduledStep(args: {
+    step: SchedulerStep;
+    pipelineState: ProjectPipelineState;
+    traceId: string;
+    locale: AppLocale;
+    postToEngineWithRetry: (path: string, input: Record<string, unknown>, retryOptions: { retries: number; traceId: string; tool: 'run_analysis' }) => Promise<{ data: unknown }>;
+    codeCheckClient: unknown;
+    message?: string;
+    llm?: ChatOpenAI | null;
+    draftState?: DraftState;
+    skillIds?: string[];
+  }): Promise<{ artifact?: ArtifactEnvelope; runRecord?: RunRecord }> {
+    // Draft delegates to update logic — both use extractDraftParameters + buildModelFromDraft
+    return this.executeUpdateScheduledStep(args);
+  }
+
+  private async executeEnrichScheduledStep(args: {
+    step: SchedulerStep;
+    pipelineState: ProjectPipelineState;
+    traceId: string;
+    locale: AppLocale;
+    postToEngineWithRetry: (path: string, input: Record<string, unknown>, retryOptions: { retries: number; traceId: string; tool: 'run_analysis' }) => Promise<{ data: unknown }>;
+    codeCheckClient: unknown;
+  }): Promise<{ artifact?: ArtifactEnvelope; runRecord?: RunRecord; patches?: ModelPatchRecord[] }> {
+    const skillId = args.step.skillId;
+    if (!skillId) {
+      throw new Error(`Enrich step ${args.step.stepId} has no skillId`);
+    }
+
+    const plugin = await this.registry.resolvePluginById(skillId);
+    if (!plugin) {
+      // Enricher skill declared a runtimeContract but has no handler module — skip.
+      return { artifact: args.pipelineState.artifacts.normalizedModel };
+    }
+
+    const baseModel = (args.pipelineState.artifacts.normalizedModel?.payload ?? {}) as Record<string, unknown>;
+    const baseRevision = (baseModel.revision as number) ?? 1;
+
+    // Build enriched model via the skill handler
+    if (typeof plugin.handler.buildModel !== 'function') {
+      return { artifact: args.pipelineState.artifacts.normalizedModel };
+    }
+    const enrichedModel = plugin.handler.buildModel({
+      inferredType: (baseModel.metadata as Record<string, unknown>)?.inferredType as string ?? 'unknown',
+      updatedAt: Date.now(),
+    } as DraftState) ?? {};
+
+    const patchPayload = this.buildEnricherPatchPayload(baseModel, enrichedModel, plugin.manifest.domain);
+
+    if (Object.keys(patchPayload).length === 0) {
+      // No enrichable content from this skill — return existing artifact unchanged
+      const existing = args.pipelineState.artifacts.normalizedModel;
+      return { artifact: existing };
+    }
+
+    const now = Date.now();
+    const patchRecord: PatchReducerInput = {
+      patchId: `${skillId}:${now}`,
+      patchKind: 'modelPatch',
+      producerSkillId: skillId,
+      baseModelRevision: baseRevision,
+      status: 'accepted',
+      priority: plugin.manifest.priority,
+      payload: patchPayload,
+      reason: `Enriched by ${skillId}`,
+      conflicts: [],
+      basedOn: args.step.consumes,
+      createdAt: now,
+    };
+
+    const reducerResult = applyPatches(baseModel, [patchRecord]);
+
+    if (!args.step.provides) return { patches: [this.toModelPatchRecord(patchRecord, reducerResult)] };
+
+    const artifact = this.buildArtifactEnvelope(args.step.provides, reducerResult.model, args.step, args.pipelineState);
+    return { artifact, patches: [this.toModelPatchRecord(patchRecord, reducerResult)] };
+  }
+
+  private buildEnricherPatchPayload(
+    baseModel: Record<string, unknown>,
+    enrichedModel: Record<string, unknown>,
+    domain: string | undefined,
+  ): Record<string, unknown> {
+    const patchPayload: Record<string, unknown> = {};
+    const enrichFields = domain === 'section'
+      ? ['sections', 'materials'] as const
+      : ['sections', 'materials', 'nodes', 'elements', 'load_cases', 'load_combinations'] as const;
+
+    for (const field of enrichFields) {
+      const enrichedItems = Array.isArray(enrichedModel[field]) ? enrichedModel[field] as Array<Record<string, unknown>> : [];
+      if (enrichedItems.length === 0) {
+        continue;
+      }
+
+      if (field === 'sections' || field === 'materials') {
+        const baseItems = Array.isArray(baseModel[field]) ? baseModel[field] as Array<Record<string, unknown>> : [];
+        patchPayload[field] = this.preserveReferencedResourceIds(baseItems, enrichedItems);
+        continue;
+      }
+
+      patchPayload[field] = enrichedItems;
+    }
+
+    return patchPayload;
+  }
+
+  private preserveReferencedResourceIds(
+    baseItems: Array<Record<string, unknown>>,
+    enrichedItems: Array<Record<string, unknown>>,
+  ): Array<Record<string, unknown>> {
+    return enrichedItems.map((item, index) => {
+      const baseId = typeof baseItems[index]?.id === 'string' ? baseItems[index].id : undefined;
+      return baseId ? { ...item, id: baseId } : item;
+    });
+  }
+
+  private toModelPatchRecord(input: PatchReducerInput, _result: { revision: number }): ModelPatchRecord {
+    return {
+      patchId: input.patchId,
+      patchKind: input.patchKind,
+      producerSkillId: input.producerSkillId,
+      baseModelRevision: input.baseModelRevision,
+      basedOn: input.basedOn.map((b) => ({ kind: b.kind as import('./types.js').ArtifactKind, artifactId: b.artifactId, revision: b.revision })),
+      status: 'accepted',
+      priority: input.priority,
+      createdAt: input.createdAt,
+      reason: input.reason,
+      payload: input.payload,
+    };
+  }
+
+  private buildArtifactEnvelope(
+    kind: ArtifactKind,
+    payload: Record<string, unknown>,
+    step: SchedulerStep,
+    pipelineState?: ProjectPipelineState,
+    draftState?: DraftState,
+  ): ArtifactEnvelope {
+    const existing = pipelineState?.artifacts?.[kind as keyof typeof pipelineState.artifacts];
+    const revision = existing ? (existing.revision ?? 0) + 1 : 1;
+    const depRefs: Record<string, { artifactId: string; revision: number }> = {};
+    for (const ref of step.consumes) {
+      depRefs[ref.kind] = { artifactId: ref.artifactId, revision: ref.revision };
+    }
+    const draftStateHash = kind === 'normalizedModel' && draftState
+      ? computeDraftStateContentHash(draftState as Record<string, unknown>)
+      : undefined;
+    // Only include provider bindings relevant to this artifact's provider slot.
+    // analysisRaw → analysisProvider, codeCheckResult → codeCheckProvider, others → none.
+    // Must match the scheduler's fingerprint computation for reuse checks to work.
+    const relevantBindings = kind === 'analysisRaw' && pipelineState?.bindings
+      ? { analysisProviderSkillId: pipelineState.bindings.analysisProviderSkillId }
+      : kind === 'codeCheckResult' && pipelineState?.bindings
+        ? { codeCheckProviderSkillId: pipelineState.bindings.codeCheckProviderSkillId }
+        : undefined;
+    const dependencyFingerprint = computeDependencyFingerprint(depRefs, relevantBindings, draftStateHash);
+    return {
+      artifactId: `${kind}:${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      kind,
+      scope: 'project',
+      status: 'ready',
+      revision,
+      producerSkillId: step.skillId ?? `scheduled:${step.tool}`,
+      dependencyFingerprint,
+      basedOn: step.consumes.map((ref) => ({ kind: ref.kind, artifactId: ref.artifactId, revision: ref.revision })),
+      schemaVersion: '1.0.0',
+      provenance: { toolId: `scheduled:${step.tool}` },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      payload,
+    };
   }
 }

@@ -300,6 +300,8 @@ async function validateAgentOrchestration(context) {
     assert(result.toolCalls.some((call) => call.tool === "draft_model"), "draft_model should be called");
     assert(result.toolCalls.some((call) => call.tool === "validate_model"), "validate_model should be called after draft");
     assert(result.toolCalls.some((call) => call.tool === "run_analysis"), "run_analysis should be called after draft");
+    assert(!result.toolCalls.some((call) => call.tool === "run_code_check"), "run_code_check should stay disabled when autoCodeCheck is false");
+    assert(!result.toolCalls.some((call) => call.tool === "generate_report"), "generate_report should stay disabled when includeReport is false");
     assert(result.toolCalls.some((call) => call.tool === "draft_model" && Array.isArray(call.authorizedBySkillIds) && call.authorizedBySkillIds.length > 0), "draft_model should expose authorized skill ids");
     console.log("[ok] agent text-to-model draft orchestration");
   }
@@ -494,7 +496,7 @@ async function validateAgentOrchestration(context) {
     assert(beam.success === true, "double-span beam draft should succeed");
     assert(Array.isArray(beam.model?.elements) && beam.model.elements.length === 2, "double-span beam should have 2 elements");
 
-    const truss = await svc.runForcedExecution({
+    const truss = await svc.runChatOnly({
       message: "建立一个平面桁架，长度5m，10kN轴向荷载并计算",
       context: {
         userDecision: "allow_auto_decide",
@@ -599,6 +601,104 @@ async function validateAgentOrchestration(context) {
       fsModule.unlinkSync(artifact.path);
     }
     console.log("[ok] analyze code-check report closed loop");
+  }
+
+  {
+    const agentSource = fs.readFileSync(path.join(context.rootDir, 'backend', 'src', 'services', 'agent.ts'), 'utf8');
+    assert(
+      agentSource.includes('targetArtifact'),
+      'agent orchestration should route execution through targetArtifact planning',
+    );
+    assert(
+      agentSource.includes('projectPolicy'),
+      'agent orchestration should consume project-level execution policy',
+    );
+    assert(
+      agentSource.includes('pipelineScheduler'),
+      'agent orchestration should delegate to pipeline scheduler',
+    );
+    console.log("[ok] agent orchestration target-artifact terms");
+  }
+
+  {
+    const chatPath = path.join(context.rootDir, 'backend', 'src', 'api', 'chat.ts');
+    const chatSource = fs.readFileSync(chatPath, 'utf8');
+
+    const conversationPath = path.join(context.rootDir, 'backend', 'src', 'services', 'conversation.ts');
+    const conversationSource = fs.readFileSync(conversationPath, 'utf8');
+
+    assert(
+      chatSource.includes('projectId'),
+      '/api/v1/chat must accept projectId to align with /api/v1/agent/run',
+    );
+    assert(
+      conversationSource.includes('PROJECTION CACHE') || conversationSource.includes('projection cache'),
+      'conversation.ts must document that snapshots are projection caches, not pipeline truth',
+    );
+    console.log("[ok] chat projectId passthrough and snapshot boundary");
+  }
+
+  {
+    const { skillManifestFileSchema } = await import(
+      pathToFileURL(path.join(context.rootDir, 'backend', 'dist', 'agent-runtime', 'manifest-schema.js')).href
+    );
+    const { parse: parseYaml } = backendRequire(context.rootDir)('yaml');
+    const { existsSync, readdirSync, readFileSync } = require('node:fs');
+
+    function collectDirectories(root) {
+      const result = [];
+      const queue = [root];
+      while (queue.length > 0) {
+        const dir = queue.shift();
+        result.push(dir);
+        try {
+          const entries = readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            if (entry.isDirectory()) queue.push(path.join(dir, entry.name));
+          }
+        } catch { /* ignore */ }
+      }
+      return result;
+    }
+
+    const DOMAIN_ROLE_MAP = {
+      'structure-type': 'entry',
+      'data-input': 'entry',
+      'section': 'enricher',
+      'material': 'enricher',
+      'load-boundary': 'enricher',
+      'design': 'designer',
+      'validation': 'validator',
+      'analysis': 'provider',
+      'result-postprocess': 'transformer',
+      'code-check': 'provider',
+      'drawing': 'consumer',
+      'report-export': 'consumer',
+      'visualization': 'consumer',
+      'general': 'assistant',
+    };
+
+    const skillManifestRoot = path.join(context.rootDir, 'backend', 'src', 'agent-skills');
+    const dirs = collectDirectories(skillManifestRoot);
+    let checkedCount = 0;
+    for (const dir of dirs) {
+      const manifestPath = path.join(dir, 'skill.yaml');
+      if (!existsSync(manifestPath)) continue;
+      const parsed = skillManifestFileSchema.safeParse(parseYaml(readFileSync(manifestPath, 'utf8')));
+      if (!parsed.success) continue;
+      if (!parsed.data.runtimeContract) continue;
+      const expectedRole = DOMAIN_ROLE_MAP[parsed.data.domain];
+      assert(
+        parsed.data.runtimeContract.role === expectedRole,
+        `Skill ${parsed.data.id} in domain ${parsed.data.domain} must declare role ${expectedRole}, got ${parsed.data.runtimeContract.role}`,
+      );
+      checkedCount++;
+    }
+    assert(
+      checkedCount >= 1,
+      `At least 1 builtin skill must declare runtimeContract for domain-to-role validation (found ${checkedCount})`,
+    );
+    console.log(`[ok] domain-to-role mapping validation (${checkedCount} skills checked)`);
   }
 }
 
