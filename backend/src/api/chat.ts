@@ -5,6 +5,7 @@ import { AgentService } from '../services/agent.js';
 import { config } from '../config/index.js';
 import { isLlmTimeoutError, toLlmApiError } from '../utils/llm-error.js';
 import { prisma } from '../utils/database.js';
+import type { InputJsonValue } from '../utils/json.js';
 
 const conversationService = new ConversationService();
 const agentService = new AgentService();
@@ -47,6 +48,7 @@ const sendMessageSchema = z.object({
     reportOutput: z.enum(['inline', 'file']).optional(),
     userDecision: z.enum(['provide_values', 'confirm_all', 'allow_auto_decide', 'revise']).optional(),
     providedValues: z.record(z.any()).optional(),
+    resumeFromMessage: z.string().max(10000).optional(),
   }).optional(),
 });
 
@@ -84,8 +86,31 @@ const streamMessageSchema = z.object({
     reportOutput: z.enum(['inline', 'file']).optional(),
     userDecision: z.enum(['provide_values', 'confirm_all', 'allow_auto_decide', 'revise']).optional(),
     providedValues: z.record(z.any()).optional(),
+    resumeFromMessage: z.string().max(10000).optional(),
   }).optional(),
 });
+
+const persistMessagesSchema = z.object({
+  userMessage: z.string().min(1).max(10000),
+  assistantContent: z.string().max(10000).default(''),
+  assistantAborted: z.boolean().optional(),
+  traceId: optionalIdSchema,
+});
+
+function toMessageMetadata(value: Record<string, unknown> | undefined): InputJsonValue | undefined {
+  if (!value || Object.keys(value).length === 0) {
+    return undefined;
+  }
+  return value as InputJsonValue;
+}
+
+function getPersistedMessageTraceId(metadata: unknown): string | undefined {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return undefined;
+  }
+  const traceId = (metadata as Record<string, unknown>).traceId;
+  return typeof traceId === 'string' && traceId.trim().length > 0 ? traceId : undefined;
+}
 
 function setSseCorsHeaders(request: FastifyRequest, reply: FastifyReply) {
   const origin = request.headers.origin;
@@ -101,6 +126,76 @@ function setSseCorsHeaders(request: FastifyRequest, reply: FastifyReply) {
   reply.raw.setHeader('Access-Control-Allow-Origin', origin);
   reply.raw.setHeader('Access-Control-Allow-Credentials', 'true');
   reply.raw.setHeader('Vary', 'Origin');
+}
+
+function buildEffectiveAgentMessage(message: string, resumeFromMessage?: string): string {
+  const normalizedMessage = message.trim();
+  const normalizedResume = typeof resumeFromMessage === 'string' ? resumeFromMessage.trim() : '';
+
+  if (!normalizedResume || normalizedResume === normalizedMessage) {
+    return normalizedMessage;
+  }
+
+  return `${normalizedResume}\n\n${normalizedMessage}`;
+}
+
+function buildPersistedDebugDetails(params: {
+  userMessage: string;
+  context?: z.infer<typeof sendMessageSchema>['context'];
+  result: unknown;
+}): Record<string, unknown> | undefined {
+  const resultRecord = params.result && typeof params.result === 'object' && !Array.isArray(params.result)
+    ? params.result as Record<string, unknown>
+    : null;
+  if (!resultRecord) {
+    return undefined;
+  }
+
+  const skillIds = Array.isArray(params.context?.skillIds)
+    ? params.context.skillIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : [];
+  const toolIds = Array.isArray(params.context?.enabledToolIds)
+    ? params.context.enabledToolIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : [];
+  const routing = resultRecord.routing && typeof resultRecord.routing === 'object' && !Array.isArray(resultRecord.routing)
+    ? resultRecord.routing as Record<string, unknown>
+    : undefined;
+  const plan = Array.isArray(resultRecord.plan)
+    ? resultRecord.plan.filter((value): value is string => typeof value === 'string')
+    : [];
+  const toolCalls = Array.isArray(resultRecord.toolCalls) ? resultRecord.toolCalls : [];
+
+  if (
+    skillIds.length === 0
+    && toolIds.length === 0
+    && !routing
+    && plan.length === 0
+    && toolCalls.length === 0
+    && typeof resultRecord.response !== 'string'
+  ) {
+    return undefined;
+  }
+
+  // Build a compact context snapshot, omitting large fields like model/parameters
+  // to avoid DB bloat.
+  const compactContext: Record<string, unknown> = {};
+  if (params.context?.locale) compactContext.locale = params.context.locale;
+  if (params.context?.skillIds) compactContext.skillIds = params.context.skillIds;
+  if (params.context?.enabledToolIds) compactContext.enabledToolIds = params.context.enabledToolIds;
+  if (params.context?.engineId) compactContext.engineId = params.context.engineId;
+
+  return {
+    promptSnapshot: JSON.stringify({
+      message: params.userMessage,
+      context: compactContext,
+    }, null, 2),
+    skillIds,
+    toolIds,
+    routing,
+    responseSummary: typeof resultRecord.response === 'string' ? resultRecord.response : '',
+    plan,
+    toolCalls,
+  };
 }
 
 async function persistLatestConversationResult(params: {
@@ -137,6 +232,76 @@ async function persistLatestConversationResult(params: {
   }
 }
 
+async function persistConversationMessages(params: {
+  conversationId?: string;
+  userId?: string;
+  userMessage: string;
+  assistantContent: string;
+  assistantAborted?: boolean;
+  traceId?: string;
+  assistantMetadata?: Record<string, unknown>;
+}): Promise<void> {
+  const conversationId = params.conversationId?.trim();
+  const userMessage = params.userMessage.trim();
+  const assistantContent = params.assistantContent.length > 10000
+    ? params.assistantContent.slice(0, 10000)
+    : params.assistantContent;
+  const shouldPersistAssistant = assistantContent.trim().length > 0 || Boolean(params.assistantAborted);
+
+  if (!conversationId) {
+    return;
+  }
+  if (!userMessage || !shouldPersistAssistant) {
+    return;
+  }
+
+  try {
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: conversationId, userId: params.userId },
+      select: { id: true },
+    });
+
+    if (!conversation) {
+      return;
+    }
+
+    if (params.traceId) {
+      const recentMessages = await prisma.message.findMany({
+        where: { conversationId },
+        orderBy: { createdAt: 'desc' },
+        take: 6,
+        select: { metadata: true },
+      });
+      if (recentMessages.some((message) => getPersistedMessageTraceId(message.metadata) === params.traceId)) {
+        return;
+      }
+    }
+
+    await prisma.message.createMany({
+      data: [
+        {
+          conversationId,
+          role: 'user',
+          content: userMessage,
+          metadata: toMessageMetadata(params.traceId ? { traceId: params.traceId } : undefined),
+        },
+        {
+          conversationId,
+          role: 'assistant',
+          content: assistantContent,
+          metadata: toMessageMetadata({
+            ...(params.assistantMetadata ? params.assistantMetadata : {}),
+            ...(params.traceId ? { traceId: params.traceId } : {}),
+            ...(params.assistantAborted ? { status: 'aborted' } : {}),
+          }),
+        },
+      ],
+    });
+  } catch (error) {
+    console.warn('[chat] skip message persistence:', error instanceof Error ? error.message : String(error));
+  }
+}
+
 export async function chatRoutes(fastify: FastifyInstance) {
   // 发送消息
   fastify.post('/message', {
@@ -158,14 +323,30 @@ export async function chatRoutes(fastify: FastifyInstance) {
     try {
       const body = sendMessageSchema.parse(request.body);
       const userId = request.user?.id;
+      const effectiveMessage = buildEffectiveAgentMessage(body.message, body.context?.resumeFromMessage);
       const result = await agentService.run({
         ...body,
+        message: effectiveMessage,
         userId,
       });
       await persistLatestConversationResult({
         conversationId: result.conversationId,
         userId,
         latestResult: result,
+      });
+      const assistantText = result.response || result.clarification?.question || '';
+      const debugDetails = buildPersistedDebugDetails({
+        userMessage: body.message,
+        context: body.context,
+        result,
+      });
+      await persistConversationMessages({
+        conversationId: result.conversationId,
+        userId,
+        userMessage: body.message,
+        assistantContent: assistantText,
+        traceId: body.traceId,
+        assistantMetadata: debugDetails ? { debugDetails } : undefined,
       });
       return reply.send({ result });
     } catch (error) {
@@ -298,6 +479,29 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
     return reply.send({ success: true });
   });
+
+  fastify.post('/conversation/:id/messages', {
+    schema: {
+      tags: ['Chat'],
+      summary: '保存会话消息',
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: z.infer<typeof persistMessagesSchema> }>, reply: FastifyReply) => {
+    const { id } = request.params;
+    const body = persistMessagesSchema.parse(request.body);
+    const userId = request.user?.id;
+
+    await persistConversationMessages({
+      conversationId: id,
+      userId,
+      userMessage: body.userMessage,
+      assistantContent: body.assistantContent,
+      assistantAborted: body.assistantAborted,
+      traceId: body.traceId,
+    });
+
+    return reply.send({ success: true });
+  });
+
   // 流式响应 (SSE)
   fastify.post('/stream', {
     schema: {
@@ -308,6 +512,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     const body = streamMessageSchema.parse(request.body);
     const userId = request.user?.id;
     let streamConversationId = body.conversationId;
+    const effectiveMessage = buildEffectiveAgentMessage(body.message, body.context?.resumeFromMessage);
 
     reply.hijack();
     setSseCorsHeaders(request, reply);
@@ -317,20 +522,62 @@ export async function chatRoutes(fastify: FastifyInstance) {
     reply.raw.setHeader('X-Accel-Buffering', 'no');
     reply.raw.flushHeaders?.();
 
+    const abortController = new AbortController();
+    const onClose = () => { abortController.abort(); };
+    // Listen on both reply.raw and request.socket to reliably detect
+    // client disconnect. reply.raw 'close' may not fire on all Node.js
+    // versions; request.socket 'close' fires when the TCP socket closes.
+    reply.raw.on('close', onClose);
+    request.socket.on('close', onClose);
+
+    let assistantContent = '';
+    let assistantMetadata: Record<string, unknown> | undefined;
+    let messagesPersisted = false;
+    let streamTraceId = body.traceId;
+
+    const persistStreamMessages = async (assistantAborted?: boolean) => {
+      if (messagesPersisted) {
+        return;
+      }
+      await persistConversationMessages({
+        conversationId: streamConversationId,
+        userId,
+        userMessage: body.message,
+        assistantContent,
+        assistantAborted,
+        traceId: streamTraceId,
+        assistantMetadata,
+      });
+      messagesPersisted = true;
+    };
+
     try {
       const stream = agentService.runStream({
         ...body,
+        message: effectiveMessage,
         userId,
+        signal: abortController.signal,
       });
 
       for await (const chunk of stream) {
+        if (abortController.signal.aborted) break;
         if (
           chunk
           && typeof chunk === 'object'
           && (chunk as { type?: string }).type === 'start'
           && (chunk as { content?: { conversationId?: string } }).content?.conversationId
         ) {
-          streamConversationId = (chunk as { content: { conversationId: string } }).content.conversationId;
+          const startContent = (chunk as { content: { conversationId: string; traceId?: string } }).content;
+          streamConversationId = startContent.conversationId;
+          if (startContent.traceId) streamTraceId = startContent.traceId;
+        }
+        if (
+          chunk
+          && typeof chunk === 'object'
+          && (chunk as { type?: string }).type === 'token'
+          && typeof (chunk as { content?: unknown }).content === 'string'
+        ) {
+          assistantContent += (chunk as { content: string }).content;
         }
         if (
           chunk
@@ -342,20 +589,55 @@ export async function chatRoutes(fastify: FastifyInstance) {
             userId,
             latestResult: (chunk as { content?: unknown }).content,
           });
+          const resultContent = (chunk as { content?: { response?: string; clarification?: { question?: string } } }).content;
+          if (resultContent?.response) {
+            assistantContent = resultContent.response;
+          } else if (resultContent?.clarification?.question) {
+            assistantContent = resultContent.clarification.question;
+          }
+          const debugDetails = buildPersistedDebugDetails({
+            userMessage: body.message,
+            context: body.context,
+            result: resultContent,
+          });
+          assistantMetadata = debugDetails ? { debugDetails } : undefined;
+        }
+        if (
+          chunk
+          && typeof chunk === 'object'
+          && (chunk as { type?: string }).type === 'interaction_update'
+          && (chunk as { content?: { guidanceText?: string } }).content?.guidanceText
+        ) {
+          assistantContent = (chunk as { content: { guidanceText: string } }).content.guidanceText;
         }
         reply.raw.write(`data: ${JSON.stringify(normalizePublicStreamChunk(chunk))}\n\n`);
       }
 
+      // Save user + assistant messages to DB so the next request has context.
+      // This runs for both completed and aborted streams.
+      const wasAborted = abortController.signal.aborted;
+      await persistStreamMessages(wasAborted);
+
       reply.raw.write('data: [DONE]\n\n');
       reply.raw.end();
     } catch (error) {
-      request.log.error({ err: error }, 'Unexpected error in /api/v1/chat/stream');
-      reply.raw.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: error instanceof Error ? error.message : 'stream failed',
-      })}\n\n`);
-      reply.raw.write('data: [DONE]\n\n');
-      reply.raw.end();
+      if (abortController.signal.aborted) {
+        request.log.info({ conversationId: streamConversationId }, 'Stream aborted by client');
+        reply.raw.end();
+      } else {
+        request.log.error({ err: error }, 'Unexpected error in /api/v1/chat/stream');
+        reply.raw.write(`data: ${JSON.stringify({
+          type: 'error',
+          error: error instanceof Error ? error.message : 'stream failed',
+        })}\n\n`);
+        reply.raw.write('data: [DONE]\n\n');
+        reply.raw.end();
+      }
+    } finally {
+      // Ensure messages are persisted even on unexpected errors.
+      await persistStreamMessages(abortController.signal.aborted).catch(() => {});
+      reply.raw.off('close', onClose);
+      request.socket.off('close', onClose);
     }
   });
 
