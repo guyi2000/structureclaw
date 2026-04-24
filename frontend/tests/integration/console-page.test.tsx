@@ -235,11 +235,21 @@ function mockConsoleSupportRequest(url: string) {
 }
 
 describe('ConsolePage Integration (CONS-13)', () => {
+  function setViewportWidth(width: number) {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: width,
+      writable: true,
+    })
+    window.dispatchEvent(new Event('resize'))
+  }
+
   beforeEach(() => {
     // Real backend provides all API responses (skills, capabilities, conversations, etc.)
     // Individual tests may spy on fetch for specific mock scenarios.
     window.localStorage.clear()
     clearLocaleCookie()
+    setViewportWidth(1366)
     Element.prototype.scrollIntoView = vi.fn()
   })
 
@@ -281,11 +291,123 @@ describe('ConsolePage Integration (CONS-13)', () => {
     expect(screen.getByText('Analysis Results & Report')).toBeInTheDocument()
   })
 
+  it('collapses and restores the conversation history panel', async () => {
+    setViewportWidth(1366)
+    await renderConsolePage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse History' }))
+
+    expect(screen.getByTestId('console-layout-grid')).toHaveAttribute('data-history-collapsed', 'true')
+    expect(screen.getByRole('button', { name: 'Expand History' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: /^History$|^历史$/ })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand History' }))
+
+    expect(screen.getByTestId('console-layout-grid')).toHaveAttribute('data-history-collapsed', 'false')
+    expect(screen.getByRole('heading', { name: /^History$|^历史$/ })).toBeInTheDocument()
+  })
+
+  it('opens the analysis result panel in a dialog', async () => {
+    await renderConsolePage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Results' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Analysis Results & Report' })
+    expect(dialog).toBeInTheDocument()
+    expect(within(dialog).getByTestId('console-output-panel')).toBeInTheDocument()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close Results' }))
+    expect(screen.queryByRole('dialog', { name: 'Analysis Results & Report' })).not.toBeInTheDocument()
+  })
+
+  it('switches between docked and popup result modes', async () => {
+    await renderConsolePage()
+
+    expect(screen.getByTestId('console-layout-grid')).toHaveAttribute('data-output-mode', 'dock')
+    expect(screen.getByTestId('console-output-dock')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use Popup Results' }))
+    expect(screen.getByTestId('console-layout-grid')).toHaveAttribute('data-output-mode', 'modal')
+    expect(screen.queryByTestId('console-output-dock')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dock Results' }))
+    expect(screen.getByTestId('console-layout-grid')).toHaveAttribute('data-output-mode', 'dock')
+    expect(screen.getByTestId('console-output-dock')).toBeInTheDocument()
+  })
+
+  it('restores the collapsed history preference from localStorage', async () => {
+    setViewportWidth(1366)
+    window.localStorage.setItem('structureclaw.console.ui-preferences', JSON.stringify({
+      historyCollapsed: true,
+      outputMode: 'dock',
+    }))
+
+    await renderConsolePage()
+
+    expect(screen.getByTestId('console-layout-grid')).toHaveAttribute('data-history-collapsed', 'true')
+    expect(screen.getByRole('button', { name: 'Expand History' })).toBeInTheDocument()
+  })
+
+  it('keeps history expanded below the sidebar breakpoint', async () => {
+    setViewportWidth(1024)
+    window.localStorage.setItem('structureclaw.console.ui-preferences', JSON.stringify({
+      historyCollapsed: true,
+      outputMode: 'dock',
+    }))
+
+    await renderConsolePage()
+
+    expect(screen.getByTestId('console-layout-grid')).toHaveAttribute('data-history-collapsed', 'false')
+    expect(screen.getByRole('heading', { name: /^History$|^历史$/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Expand History' })).not.toBeInTheDocument()
+  })
+
+  it('persists collapsed history changes', async () => {
+    setViewportWidth(1366)
+    await renderConsolePage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse History' }))
+
+    await waitFor(() => {
+      expect(JSON.parse(window.localStorage.getItem('structureclaw.console.ui-preferences') || '{}')).toMatchObject({
+        historyCollapsed: true,
+        outputMode: 'dock',
+      })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand History' }))
+
+    await waitFor(() => {
+      expect(JSON.parse(window.localStorage.getItem('structureclaw.console.ui-preferences') || '{}')).toMatchObject({
+        historyCollapsed: false,
+        outputMode: 'dock',
+      })
+    })
+  })
+
+  it('ignores blocked console UI preference saves', async () => {
+    setViewportWidth(1366)
+    await renderConsolePage()
+
+    const originalSetItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function setItem(key: string, value: string) {
+      if (key === 'structureclaw.console.ui-preferences') {
+        throw new DOMException('Blocked', 'QuotaExceededError')
+      }
+      return originalSetItem.call(this, key, value)
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse History' }))
+
+    expect(screen.getByTestId('console-layout-grid')).toHaveAttribute('data-history-collapsed', 'true')
+    expect(screen.getByRole('button', { name: 'Expand History' })).toBeInTheDocument()
+  })
+
   it('shows the conversational composer controls', async () => {
     await renderConsolePage()
 
     expect(screen.getByPlaceholderText(/Describe your structural goal/)).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Manage Capabilities' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Manage Capabilities' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Expand Engineering Context' })).toBeInTheDocument()
     expect(screen.getByText('Database tools')).toBeInTheDocument()
     expect(screen.getByText(/Review SQLite file health/i)).toBeInTheDocument()
@@ -323,7 +445,7 @@ describe('ConsolePage Integration (CONS-13)', () => {
 
     expect(screen.getByText('Current capabilities')).toBeInTheDocument()
     expect(screen.getByText('Capability selection moved into a dedicated settings page so the chat workspace stays focused on conversation and results.')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Manage Capabilities' })).toHaveAttribute('href', '/console/capabilities')
+    expect(screen.getByRole('button', { name: 'Manage Capabilities' })).toBeInTheDocument()
     expect(screen.queryByText('Beam Helper')).not.toBeInTheDocument()
     expect(screen.queryByText('Frame Checker')).not.toBeInTheDocument()
   })
@@ -696,7 +818,7 @@ describe('ConsolePage Integration (CONS-13)', () => {
       throw new Error(`Unexpected fetch: ${url}`)
     })
 
-    render(<ConsolePage />)
+    render(<AppStoreProvider><ConsolePage /></AppStoreProvider>)
 
     expect(screen.getByText(/Loading conversation list|正在加载会话列表/)).toBeInTheDocument()
 
@@ -1307,7 +1429,7 @@ describe('ConsolePage Integration (CONS-13)', () => {
 
     expect(screen.getByText('历史会话')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '发送' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: '管理能力' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '管理能力' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '展开工程上下文' })).toBeInTheDocument()
     expect(screen.queryByText('计算引擎 自动选择')).not.toBeInTheDocument()
     expect(screen.queryByText('已选择技能')).not.toBeInTheDocument()

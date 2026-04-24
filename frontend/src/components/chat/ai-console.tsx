@@ -3,13 +3,14 @@
 import dynamic from 'next/dynamic'
 import { createPortal } from 'react-dom'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import Link from 'next/link'
+import { useStore } from '@/lib/stores/context'
 import { MarkdownBody } from './markdown-body'
 import { ToolCallCard } from './tool-call-card'
-import { ArrowUp, Bot, BrainCircuit, Clock3, Cuboid, FileText, Loader2, Maximize2, MessageSquarePlus, Orbit, RefreshCw, Sparkles, Square, Trash2, User } from 'lucide-react'
+import { ArrowUp, Bot, BrainCircuit, Clock3, Cuboid, FileText, Loader2, Maximize2, MessageSquarePlus, Orbit, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, RefreshCw, Sparkles, Square, Trash2, User } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { DialogShell } from '@/components/ui/dialog-shell'
 import { Separator } from '@/components/ui/separator'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toast'
@@ -403,6 +404,110 @@ function resolveSkillDomainLabel(domain: SkillDomain, t: (key: MessageKey) => st
 }
 
 const STORAGE_KEY = 'structureclaw.console.conversations'
+const CONSOLE_UI_PREFERENCES_STORAGE_KEY = 'structureclaw.console.ui-preferences'
+const SIDEBAR_LAYOUT_MIN_WIDTH = 1280
+type ConsoleOutputMode = 'dock' | 'modal'
+type ConsoleUiPreferences = {
+  historyCollapsed: boolean
+  outputMode: ConsoleOutputMode
+}
+const DEFAULT_CONSOLE_UI_PREFERENCES: ConsoleUiPreferences = {
+  historyCollapsed: false,
+  outputMode: 'dock',
+}
+
+function loadConsoleUiPreferences(): ConsoleUiPreferences {
+  if (typeof window === 'undefined') {
+    return DEFAULT_CONSOLE_UI_PREFERENCES
+  }
+
+  try {
+    const raw = window.localStorage.getItem(CONSOLE_UI_PREFERENCES_STORAGE_KEY)
+    if (!raw) {
+      return DEFAULT_CONSOLE_UI_PREFERENCES
+    }
+    const parsed = JSON.parse(raw) as Partial<ConsoleUiPreferences> | null
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return DEFAULT_CONSOLE_UI_PREFERENCES
+    }
+
+    return {
+      historyCollapsed: typeof parsed.historyCollapsed === 'boolean'
+        ? parsed.historyCollapsed
+        : DEFAULT_CONSOLE_UI_PREFERENCES.historyCollapsed,
+      outputMode: parsed.outputMode === 'modal' || parsed.outputMode === 'dock'
+        ? parsed.outputMode
+        : DEFAULT_CONSOLE_UI_PREFERENCES.outputMode,
+    }
+  } catch {
+    return DEFAULT_CONSOLE_UI_PREFERENCES
+  }
+}
+
+function saveConsoleUiPreferences(preferences: ConsoleUiPreferences) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.localStorage.setItem(CONSOLE_UI_PREFERENCES_STORAGE_KEY, JSON.stringify(preferences))
+  } catch {
+    return
+  }
+}
+
+type MessageRenderGroup =
+  | { type: 'single'; message: Message }
+  | { type: 'assistant-execution'; assistant: Message; tools: Message[] }
+
+function groupMessagesForRendering(messages: Message[]): MessageRenderGroup[] {
+  const groups: MessageRenderGroup[] = []
+
+  messages.forEach((message) => {
+    if (message.role === 'tool') {
+      const previous = groups[groups.length - 1]
+      if (previous?.type === 'assistant-execution') {
+        groups[groups.length - 1] = {
+          ...previous,
+          tools: [...previous.tools, message],
+        }
+        return
+      }
+      groups.push({ type: 'single', message })
+      return
+    }
+
+    if (message.role === 'assistant' && message.presentation?.mode === 'execution') {
+      groups.push({ type: 'assistant-execution', assistant: message, tools: [] })
+      return
+    }
+
+    groups.push({ type: 'single', message })
+  })
+
+  return groups
+}
+
+function findPreviousUserMessage(messages: Message[], messageId: string): Message | null {
+  const index = messages.findIndex((message) => message.id === messageId)
+  for (let i = index - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === 'user') return messages[i]
+  }
+  return null
+}
+
+function getIsSidebarLayout() {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  if (typeof window.matchMedia === 'function') {
+    return window.matchMedia(`(min-width: ${SIDEBAR_LAYOUT_MIN_WIDTH}px)`).matches
+  }
+
+  return window.innerWidth >= SIDEBAR_LAYOUT_MIN_WIDTH
+}
+
 function createId(prefix: string) {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
     return `${prefix}-${crypto.randomUUID()}`
@@ -1252,6 +1357,7 @@ function AnalysisPanel({
   onTabChange,
   t,
   locale,
+  panelIdPrefix = 'output',
 }: {
   result: AgentResult | null
   modelVisualizationSnapshot: VisualizationSnapshot | null
@@ -1261,6 +1367,7 @@ function AnalysisPanel({
   onTabChange: (tab: PanelTab) => void
   t: (key: MessageKey) => string
   locale: AppLocale
+  panelIdPrefix?: string
 }) {
   const analysis = extractAnalysis(result)
   const stats = extractSummaryStats(analysis, t, locale)
@@ -1271,6 +1378,9 @@ function AnalysisPanel({
   const guidance = result?.interaction
   const hasVisualizationData = Boolean(visualizationSnapshot || modelVisualizationSnapshot)
   const showVisualizationAction = Boolean(result || visualizationSnapshot)
+  const analysisTabId = `${panelIdPrefix}-tab-analysis`
+  const reportTabId = `${panelIdPrefix}-tab-report`
+  const tabPanelId = `${panelIdPrefix}-tabpanel-output`
 
   return (
     <div
@@ -1310,16 +1420,16 @@ function AnalysisPanel({
                 const nextTab = activeTab === 'analysis' ? 'report' : 'analysis'
                 onTabChange(nextTab)
                 requestAnimationFrame(() => {
-                  document.getElementById(nextTab === 'analysis' ? 'tab-analysis' : 'tab-report')?.focus()
+                  document.getElementById(nextTab === 'analysis' ? analysisTabId : reportTabId)?.focus()
                 })
               } else if (e.key === 'Home') {
                 e.preventDefault()
                 onTabChange('analysis')
-                requestAnimationFrame(() => { document.getElementById('tab-analysis')?.focus() })
+                requestAnimationFrame(() => { document.getElementById(analysisTabId)?.focus() })
               } else if (e.key === 'End') {
                 e.preventDefault()
                 onTabChange('report')
-                requestAnimationFrame(() => { document.getElementById('tab-report')?.focus() })
+                requestAnimationFrame(() => { document.getElementById(reportTabId)?.focus() })
               }
             }}
           >
@@ -1333,9 +1443,9 @@ function AnalysisPanel({
               onClick={() => onTabChange('analysis')}
               type="button"
               role="tab"
-              id="tab-analysis"
+              id={analysisTabId}
               aria-selected={activeTab === 'analysis'}
-              aria-controls="tabpanel-output"
+              aria-controls={tabPanelId}
               tabIndex={activeTab === 'analysis' ? 0 : -1}
             >
               {t('analysisTab')}
@@ -1350,9 +1460,9 @@ function AnalysisPanel({
               onClick={() => onTabChange('report')}
               type="button"
               role="tab"
-              id="tab-report"
+              id={reportTabId}
               aria-selected={activeTab === 'report'}
-              aria-controls="tabpanel-output"
+              aria-controls={tabPanelId}
               tabIndex={activeTab === 'report' ? 0 : -1}
             >
               {t('reportTab')}
@@ -1361,7 +1471,7 @@ function AnalysisPanel({
         </div>
       </div>
 
-      <div data-testid="console-output-scroll" className="flex-1 overflow-auto p-5 xl:min-h-0" role="tabpanel" id="tabpanel-output" aria-labelledby={`tab-${activeTab}`}>
+      <div data-testid="console-output-scroll" className="flex-1 overflow-auto p-5 xl:min-h-0" role="tabpanel" id={tabPanelId} aria-labelledby={activeTab === 'analysis' ? analysisTabId : reportTabId}>
         {!result && (
           <Card className="border-border/70 bg-card/85 text-foreground shadow-none dark:border-white/10 dark:bg-slate-950/40">
             <CardHeader>
@@ -1646,6 +1756,7 @@ function extractPdfUrl(content: string): string | null {
 
 export function AIConsole() {
   const { t, locale } = useI18n()
+  const openWorkspaceSettings = useStore((state) => state.openWorkspaceSettings)
   const initialAssistantMessage = useMemo<Message>(() => ({
     id: 'welcome',
     role: 'assistant',
@@ -1695,6 +1806,10 @@ export function AIConsole() {
   const [pendingDeleteConversationId, setPendingDeleteConversationId] = useState('')
   const [deletingConversationId, setDeletingConversationId] = useState('')
   const [conversationActivityAt, setConversationActivityAt] = useState<Record<string, string>>({})
+  const [uiPreferences, setUiPreferences] = useState<ConsoleUiPreferences>(DEFAULT_CONSOLE_UI_PREFERENCES)
+  const [uiPreferencesHydrated, setUiPreferencesHydrated] = useState(false)
+  const [resultDialogOpen, setResultDialogOpen] = useState(false)
+  const [isSidebarLayout, setIsSidebarLayout] = useState(getIsSidebarLayout)
   const chatScrollRef = useRef<HTMLDivElement | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const shouldStickToBottomRef = useRef(true)
@@ -1708,6 +1823,58 @@ export function AIConsole() {
   const resumeRequiredRef = useRef(false)
   // Interaction option chips from ask_user_clarification
   const [pendingOptions, setPendingOptions] = useState<string[]>([])
+
+  const outputMode = uiPreferences.outputMode
+
+  const messageRenderGroups = useMemo(() => groupMessagesForRendering(messages), [messages])
+
+  function setOutputMode(nextMode: ConsoleOutputMode) {
+    setUiPreferences((current) => ({
+      ...current,
+      outputMode: nextMode,
+    }))
+  }
+
+  useEffect(() => {
+    setUiPreferences(loadConsoleUiPreferences())
+    setUiPreferencesHydrated(true)
+  }, [])
+
+  useEffect(() => {
+    if (!uiPreferencesHydrated) {
+      return
+    }
+
+    saveConsoleUiPreferences(uiPreferences)
+  }, [uiPreferences, uiPreferencesHydrated])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const media = typeof window.matchMedia === 'function'
+      ? window.matchMedia(`(min-width: ${SIDEBAR_LAYOUT_MIN_WIDTH}px)`)
+      : null
+    const updateSidebarLayout = () => {
+      setIsSidebarLayout(media ? media.matches : window.innerWidth >= SIDEBAR_LAYOUT_MIN_WIDTH)
+    }
+
+    updateSidebarLayout()
+
+    if (media) {
+      if (typeof media.addEventListener === 'function') {
+        media.addEventListener('change', updateSidebarLayout)
+        return () => media.removeEventListener('change', updateSidebarLayout)
+      }
+
+      media.addListener(updateSidebarLayout)
+      return () => media.removeListener(updateSidebarLayout)
+    }
+
+    window.addEventListener('resize', updateSidebarLayout)
+    return () => window.removeEventListener('resize', updateSidebarLayout)
+  }, [])
 
   // Streaming session helpers
   function registerStreamSession(session: StreamSession) {
@@ -3380,144 +3547,212 @@ export function AIConsole() {
     }
   }
 
+  const historyCollapsed = uiPreferences.historyCollapsed && isSidebarLayout
+
   return (
     <div
       data-testid="console-layout-grid"
-      className="grid min-h-[calc(100vh-5.5rem)] gap-4 xl:h-full xl:min-h-0 xl:grid-cols-[260px_minmax(0,2.2fr)_420px] xl:overflow-hidden 2xl:grid-cols-[280px_minmax(0,2.4fr)_460px]"
+      data-history-collapsed={String(historyCollapsed)}
+      data-output-mode={outputMode}
+      className={cn(
+        'grid min-h-[calc(100vh-5.5rem)] gap-3 xl:gap-4 xl:h-full xl:min-h-0 xl:overflow-hidden transition-[grid-template-columns] duration-300 ease-in-out',
+        outputMode === 'modal'
+          ? (
+              historyCollapsed
+                ? 'xl:grid-cols-[72px_minmax(0,1fr)] 2xl:grid-cols-[80px_minmax(0,1fr)]'
+                : 'xl:grid-cols-[260px_minmax(0,1fr)] 2xl:grid-cols-[280px_minmax(0,1fr)]'
+            )
+          : (
+              historyCollapsed
+                ? 'xl:grid-cols-[72px_minmax(0,2.6fr)_420px] 2xl:grid-cols-[80px_minmax(0,2.8fr)_460px]'
+                : 'xl:grid-cols-[260px_minmax(0,2.2fr)_420px] 2xl:grid-cols-[280px_minmax(0,2.4fr)_460px]'
+            )
+      )}
     >
       <aside
         data-testid="console-history-panel"
-        className="flex h-full min-h-[320px] flex-col rounded-[28px] border border-border/70 bg-card/80 backdrop-blur-xl xl:min-h-0 dark:border-white/10 dark:bg-white/5"
+        className={cn(
+          'flex h-full flex-col rounded-[28px] border border-border/70 bg-card/80 backdrop-blur-xl xl:min-h-0 dark:border-white/10 dark:bg-white/5',
+          historyCollapsed ? 'min-h-[220px] items-center px-2 py-4' : 'min-h-[320px]'
+        )}
       >
-        <div className="border-b border-border/70 px-5 py-4 dark:border-white/10">
-          <p className="text-xs uppercase tracking-[0.24em] text-cyan-700/80 dark:text-cyan-200/70">{t('conversationMemory')}</p>
-          <h2 className="mt-1 text-lg font-semibold text-foreground">{t('conversationHistory')}</h2>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            {t('conversationHistoryDesc')}
-          </p>
-          <Button
-            type="button"
-            className="mt-4 w-full rounded-full bg-cyan-300 text-slate-950 hover:bg-cyan-200"
-            onClick={handleNewConversation}
-          >
-            <MessageSquarePlus className="h-4 w-4" />
-            {t('newConversation')}
-          </Button>
-        </div>
-
-        <div data-testid="console-history-scroll" className="flex-1 overflow-auto p-3 xl:min-h-0">
-          {historyLoading && (
-            <div className="rounded-2xl border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground dark:border-white/10 dark:bg-white/5">
-              {t('loadingConversations')}
+        {historyCollapsed ? (
+          <>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="h-10 w-10 rounded-full text-muted-foreground hover:bg-cyan-300/10 hover:text-foreground"
+              aria-label={t('expandHistoryPanel')}
+              onClick={() => setUiPreferences((current) => ({ ...current, historyCollapsed: false }))}
+            >
+              <PanelLeftOpen className="h-4 w-4" />
+            </Button>
+            <Button
+              type="button"
+              size="icon"
+              className="mt-3 h-10 w-10 rounded-full bg-cyan-300 text-slate-950 hover:bg-cyan-200"
+              aria-label={t('newConversation')}
+              onClick={handleNewConversation}
+            >
+              <MessageSquarePlus className="h-4 w-4" />
+            </Button>
+            <div className="mt-5 flex flex-1 items-center justify-center">
+              <div className="flex items-center gap-3 [writing-mode:vertical-rl]">
+                <span className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-700/80 dark:text-cyan-200/70">
+                  {t('historyCollapsedTitle')}
+                </span>
+                <span className="sr-only">{t('historyCollapsedBody')}</span>
+              </div>
             </div>
-          )}
-
-          {!historyLoading && historyError && (
-            <div className="rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
-              {historyError}
-            </div>
-          )}
-
-          {!historyLoading && mergedConversations.length === 0 && (
-            <div className="rounded-2xl border border-dashed border-border/70 bg-background/70 px-4 py-6 text-sm text-muted-foreground dark:border-white/10 dark:bg-white/5">
-              {t('noConversationHistory')}
-            </div>
-          )}
-
-          <div className="space-y-2">
-            {mergedConversations.map((conversation) => {
-              const isActive = conversation.id === conversationId
-              const isPendingDelete = conversation.id === pendingDeleteConversationId
-              const isDeleting = conversation.id === deletingConversationId
-              const archive = conversationArchive[conversation.id]
-              const preview = archive?.messages.findLast((message) => message.role === 'assistant')
-                || archive?.messages.findLast((message) => message.role === 'user')
-              const conversationTimestamp = conversation.updatedAt ?? conversation.createdAt
-
-              return (
-                <div
-                  key={conversation.id}
-                  className={cn(
-                    'rounded-[22px] border px-4 py-3 transition',
-                    isActive
-                      ? 'border-cyan-300/40 bg-cyan-300/12 text-foreground dark:text-white'
-                      : 'border-border/70 bg-background/70 text-muted-foreground hover:border-cyan-300/30 hover:bg-accent/10 dark:border-white/10 dark:bg-white/5'
-                  )}
-                >
-                  {isPendingDelete ? (
-                    <div className="space-y-3">
-                      <div className="text-sm font-medium text-foreground">{t('deleteConversationConfirm')}</div>
-                      <div className="flex gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="rounded-full bg-rose-500 text-white hover:bg-rose-400"
-                          disabled={isDeleting}
-                          onClick={() => void handleDeleteConversation(conversation.id)}
-                        >
-                          {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                          {isDeleting ? t('deletingConversation') : t('confirmDeleteConversation')}
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          className="rounded-full"
-                          disabled={isDeleting}
-                          onClick={() => setPendingDeleteConversationId('')}
-                        >
-                          {t('cancelDeleteConversation')}
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex items-start justify-between gap-3">
-                        <button
-                          type="button"
-                          onClick={() => void handleSelectConversation(conversation.id)}
-                          className="min-w-0 flex-1 text-left"
-                        >
-                          <div className="line-clamp-2 text-sm font-medium leading-6">
-                            {conversation.title || t('untitledConversation')}
-                          </div>
-                          {conversationTimestamp && (
-                            <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
-                              <Clock3 className="h-3.5 w-3.5" />
-                              <span>{formatDate(conversationTimestamp, locale)}</span>
-                              {streamingSessions.get(conversation.id)?.status === 'streaming' && (
-                                <span className="flex items-center gap-1 text-cyan-600 dark:text-cyan-400">
-                                  <span className="inline-flex h-2 w-2 rounded-full bg-cyan-500 animate-pulse" />
-                                  {t('streamingInProgress')}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                          {preview?.content && (
-                            <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                              {preview.content}
-                            </p>
-                          )}
-                        </button>
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant="ghost"
-                          className="h-9 w-9 shrink-0 rounded-full text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600 dark:hover:text-rose-300"
-                          aria-label={t('deleteConversation')}
-                          disabled={Boolean(deletingConversationId)}
-                          onClick={() => setPendingDeleteConversationId(conversation.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </>
-                  )}
+          </>
+        ) : (
+          <>
+            <div className="border-b border-border/70 px-5 py-4 dark:border-white/10">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-cyan-700/80 dark:text-cyan-200/70">{t('conversationMemory')}</p>
+                  <h2 className="mt-1 text-lg font-semibold text-foreground">{t('conversationHistory')}</h2>
                 </div>
-              )
-            })}
-          </div>
-        </div>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-9 w-9 shrink-0 rounded-full text-muted-foreground hover:bg-cyan-300/10 hover:text-foreground"
+                  aria-label={t('collapseHistoryPanel')}
+                  onClick={() => setUiPreferences((current) => ({ ...current, historyCollapsed: true }))}
+                >
+                  <PanelLeftClose className="h-4 w-4" />
+                </Button>
+              </div>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                {t('conversationHistoryDesc')}
+              </p>
+              <Button
+                type="button"
+                className="mt-4 w-full rounded-full bg-cyan-300 text-slate-950 hover:bg-cyan-200"
+                onClick={handleNewConversation}
+              >
+                <MessageSquarePlus className="h-4 w-4" />
+                {t('newConversation')}
+              </Button>
+            </div>
+
+            <div data-testid="console-history-scroll" className="flex-1 overflow-auto p-3 xl:min-h-0">
+              {historyLoading && (
+                <div className="rounded-2xl border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground dark:border-white/10 dark:bg-white/5">
+                  {t('loadingConversations')}
+                </div>
+              )}
+
+              {!historyLoading && historyError && (
+                <div className="rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
+                  {historyError}
+                </div>
+              )}
+
+              {!historyLoading && mergedConversations.length === 0 && (
+                <div className="rounded-2xl border border-dashed border-border/70 bg-background/70 px-4 py-6 text-sm text-muted-foreground dark:border-white/10 dark:bg-white/5">
+                  {t('noConversationHistory')}
+                </div>
+              )}
+
+              <div className="space-y-2">
+                {mergedConversations.map((conversation) => {
+                  const isActive = conversation.id === conversationId
+                  const isPendingDelete = conversation.id === pendingDeleteConversationId
+                  const isDeleting = conversation.id === deletingConversationId
+                  const archive = conversationArchive[conversation.id]
+                  const preview = archive?.messages.findLast((message) => message.role === 'assistant')
+                    || archive?.messages.findLast((message) => message.role === 'user')
+                  const conversationTimestamp = conversation.updatedAt ?? conversation.createdAt
+
+                  return (
+                    <div
+                      key={conversation.id}
+                      className={cn(
+                        'rounded-[22px] border px-4 py-3 transition',
+                        isActive
+                          ? 'border-cyan-300/40 bg-cyan-300/12 text-foreground dark:text-white'
+                          : 'border-border/70 bg-background/70 text-muted-foreground hover:border-cyan-300/30 hover:bg-accent/10 dark:border-white/10 dark:bg-white/5'
+                      )}
+                    >
+                      {isPendingDelete ? (
+                        <div className="space-y-3">
+                          <div className="text-sm font-medium text-foreground">{t('deleteConversationConfirm')}</div>
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="rounded-full bg-rose-500 text-white hover:bg-rose-400"
+                              disabled={isDeleting}
+                              onClick={() => void handleDeleteConversation(conversation.id)}
+                            >
+                              {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                              {isDeleting ? t('deletingConversation') : t('confirmDeleteConversation')}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="rounded-full"
+                              disabled={isDeleting}
+                              onClick={() => setPendingDeleteConversationId('')}
+                            >
+                              {t('cancelDeleteConversation')}
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex items-start justify-between gap-3">
+                            <button
+                              type="button"
+                              onClick={() => void handleSelectConversation(conversation.id)}
+                              className="min-w-0 flex-1 text-left"
+                            >
+                              <div className="line-clamp-2 text-sm font-medium leading-6">
+                                {conversation.title || t('untitledConversation')}
+                              </div>
+                              {conversationTimestamp && (
+                                <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+                                  <Clock3 className="h-3.5 w-3.5" />
+                                  <span>{formatDate(conversationTimestamp, locale)}</span>
+                                  {streamingSessions.get(conversation.id)?.status === 'streaming' && (
+                                    <span className="flex items-center gap-1 text-cyan-600 dark:text-cyan-400">
+                                      <span className="inline-flex h-2 w-2 rounded-full bg-cyan-500 animate-pulse" />
+                                      {t('streamingInProgress')}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                              {preview?.content && (
+                                <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                                  {preview.content}
+                                </p>
+                              )}
+                            </button>
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              className="h-9 w-9 shrink-0 rounded-full text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600 dark:hover:text-rose-300"
+                              aria-label={t('deleteConversation')}
+                              disabled={Boolean(deletingConversationId)}
+                              onClick={() => setPendingDeleteConversationId(conversation.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </>
+        )}
       </aside>
 
       <section
@@ -3526,13 +3761,33 @@ export function AIConsole() {
       >
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.18),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(249,115,22,0.12),transparent_30%)] dark:bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.22),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(249,115,22,0.18),transparent_30%)]" />
         <div className="relative flex h-full min-h-[320px] flex-col xl:min-h-0">
-          <div className="border-b border-border/70 px-5 py-4 dark:border-white/10">
+          <div className="border-b border-border/70 px-4 py-3 2xl:px-5 2xl:py-4 dark:border-white/10">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-xs uppercase tracking-[0.28em] text-cyan-700/80 dark:text-cyan-200/70">{t('aiConsoleEyebrow')}</p>
                 <h1 className="mt-1 text-2xl font-semibold text-foreground">{t('aiConsoleTitle')}</h1>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                {outputMode === 'modal' && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-full border-cyan-300/35 bg-cyan-300/10 text-cyan-800 hover:bg-cyan-300/20 dark:text-cyan-100"
+                    onClick={() => setResultDialogOpen(true)}
+                  >
+                    <PanelRightOpen className="h-4 w-4" />
+                    {t('openResultPanel')}
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-full"
+                  onClick={() => setOutputMode(outputMode === 'dock' ? 'modal' : 'dock')}
+                >
+                  {outputMode === 'dock' ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
+                  {outputMode === 'dock' ? t('usePopupResults') : t('dockResultPanel')}
+                </Button>
                 <Badge className="border-cyan-400/20 bg-cyan-400/10 text-cyan-700 dark:text-cyan-100" variant="outline">
                   {t('aiConsoleBadgePrimary')}
                 </Badge>
@@ -3553,7 +3808,7 @@ export function AIConsole() {
           <div
             ref={chatScrollRef}
             data-testid="console-chat-scroll"
-            className="flex-1 overflow-auto px-5 py-5 xl:min-h-0"
+            className="flex-1 overflow-auto px-4 py-4 2xl:px-5 2xl:py-5 xl:min-h-0"
           >
             <div className="flex w-full flex-col gap-4">
               {messages.length === 1 && (
@@ -3572,7 +3827,87 @@ export function AIConsole() {
                 </div>
               )}
 
-              {messages.map((message, msgIdx) => (
+              {messageRenderGroups.map((group, groupIndex) => {
+                if (group.type === 'assistant-execution') {
+                  const message = group.assistant
+                  return (
+                    <div key={message.id} data-testid="assistant-execution-group" className="flex justify-start gap-3">
+                      <div className="mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-cyan-400/15 text-cyan-700 dark:text-cyan-200">
+                        <Bot className="h-5 w-5" />
+                      </div>
+                      <div className="max-w-[88%] space-y-2">
+                        <div className="rounded-[26px] border border-border/70 bg-background/70 px-5 py-4 text-foreground shadow-lg dark:border-white/10 dark:bg-white/5">
+                          <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                            <BrainCircuit className="h-3.5 w-3.5" />
+                            <span>{t('structureClawAi')}</span>
+                            <span className="text-slate-500">{formatDate(message.timestamp, locale)}</span>
+                          </div>
+                          {message.presentation ? (
+                            <MessagePresentationView
+                              presentation={message.presentation}
+                              t={t}
+                              resolveSkillName={(skillId: string) => {
+                                const skill = availableSkills.find((s) => s.id === skillId)
+                                if (!skill) return skillId
+                                return locale === 'zh' ? (skill.name.zh || skill.name.en || skillId) : (skill.name.en || skill.name.zh || skillId)
+                              }}
+                            />
+                          ) : message.content ? (
+                            <MarkdownBody compact content={message.content} />
+                          ) : null}
+                          {message.status === 'streaming' && (
+                            <span className="inline-flex items-center gap-1.5 mt-1" role="status">
+                              <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-500 dark:bg-cyan-400" />
+                              <span className="text-xs text-muted-foreground animate-pulse">{t('streamingInProgress')}</span>
+                            </span>
+                          )}
+                          {message.status === 'aborted' && (
+                            <span className="ml-2 inline-flex items-center gap-1 text-xs text-rose-500 dark:text-rose-400">
+                              <Square className="h-2.5 w-2.5" />
+                              {t('streamAborted')}
+                            </span>
+                          )}
+                          {message.status === 'error' && (
+                            <div className="mt-2 flex items-center gap-2">
+                              <span className="text-xs text-rose-500 dark:text-rose-400">{t('streamAborted')}</span>
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1 rounded-full border border-rose-300/40 bg-rose-300/10 px-2.5 py-1 text-[11px] text-rose-800 hover:bg-rose-300/20 dark:text-rose-200"
+                                onClick={() => {
+                                  const prevUserMsg = findPreviousUserMessage(messages, message.id)
+                                  if (prevUserMsg) {
+                                    setInput(prevUserMsg.content)
+                                    composerTextareaRef.current?.focus()
+                                  }
+                                }}
+                              >
+                                <RefreshCw className="h-3 w-3" />
+                                {t('retrySend')}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        {group.tools.length > 0 ? (
+                          <div className="ml-4 space-y-2 border-l border-cyan-300/30 pl-4">
+                            {group.tools.map((toolMessage) => (
+                              toolMessage.toolStep ? (
+                                <ToolCallCard key={toolMessage.id} step={toolMessage.toolStep} t={t} attached />
+                              ) : toolMessage.status === 'streaming' ? (
+                                <span key={toolMessage.id} className="inline-flex items-center gap-1.5" role="status">
+                                  <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-500 dark:bg-cyan-400" />
+                                  <span className="text-xs text-muted-foreground animate-pulse">{t('streamingInProgress')}</span>
+                                </span>
+                              ) : null
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  )
+                }
+
+                const message = group.message
+                return (
                 <div
                   key={message.id}
                   className={cn('flex gap-3', message.role === 'user' ? 'justify-end' : 'justify-start')}
@@ -3648,8 +3983,8 @@ export function AIConsole() {
                               type="button"
                               className="inline-flex items-center gap-1 rounded-full border border-rose-300/40 bg-rose-300/10 px-2.5 py-1 text-[11px] text-rose-800 hover:bg-rose-300/20 dark:text-rose-200"
                           onClick={() => {
-                            const prevUserMsg = msgIdx > 0 ? messages[msgIdx - 1] : null
-                            if (prevUserMsg?.role === 'user') {
+                            const prevUserMsg = findPreviousUserMessage(messages, message.id)
+                            if (prevUserMsg) {
                               setInput(prevUserMsg.content)
                               composerTextareaRef.current?.focus()
                             }
@@ -3825,7 +4160,8 @@ export function AIConsole() {
                   </>
                   )}
                 </div>
-              ))}
+                )
+              })}
               <div ref={messagesEndRef} />
             </div>
           </div>
@@ -3847,7 +4183,7 @@ export function AIConsole() {
             </div>
           )}
 
-          <div data-testid="console-composer" className="border-t border-border/70 px-4 py-3 dark:border-white/10 overflow-y-auto max-h-[40vh]">
+          <div data-testid="console-composer" className="border-t border-border/70 px-3 py-3 2xl:px-4 dark:border-white/10 overflow-y-auto max-h-[40vh]">
             <div className="w-full space-y-3">
               {errorMessage && (
                 <div role="alert" className="rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
@@ -3876,14 +4212,15 @@ export function AIConsole() {
                           {t('toolShortLabel')}
                         </button>
                       </div>
-                      <p className="mt-1 text-xs leading-5 text-muted-foreground">{t('capabilitySettingsSummaryBody')}</p>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground hidden 2xl:block">{t('capabilitySettingsSummaryBody')}</p>
                     </div>
-                    <Link
-                      href="/console/capabilities"
+                    <button
+                      type="button"
                       className="rounded-full border border-cyan-300/35 bg-cyan-300/10 px-4 py-2 text-sm text-cyan-800 transition hover:bg-cyan-300/20 dark:text-cyan-100"
+                      onClick={() => openWorkspaceSettings('capabilities')}
                     >
                       {t('capabilitySettingsOpen')}
-                    </Link>
+                    </button>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Badge variant="outline" className="text-[10px]">
@@ -4057,16 +4394,21 @@ export function AIConsole() {
         </div>
       </section>
 
-      <AnalysisPanel
-        activeTab={activePanel}
-        locale={locale}
-        modelVisualizationSnapshot={latestModelVisualizationSnapshot}
-        onOpenVisualization={openVisualization}
-        onTabChange={setActivePanel}
-        result={latestResult}
-        t={t}
-        visualizationSnapshot={latestResultVisualizationSnapshot}
-      />
+      {outputMode === 'dock' && (
+        <div data-testid="console-output-dock" className="xl:min-h-0">
+          <AnalysisPanel
+            activeTab={activePanel}
+            locale={locale}
+            modelVisualizationSnapshot={latestModelVisualizationSnapshot}
+            onOpenVisualization={openVisualization}
+            onTabChange={setActivePanel}
+            panelIdPrefix="dock-output"
+            result={latestResult}
+            t={t}
+            visualizationSnapshot={latestResultVisualizationSnapshot}
+          />
+        </div>
+      )}
       <StructuralVisualizationModal
         locale={locale}
         onClose={() => setVisualizationOpen(false)}
@@ -4074,6 +4416,28 @@ export function AIConsole() {
         snapshot={activeVisualizationSnapshot}
         t={t}
       />
+      <DialogShell
+        open={resultDialogOpen}
+        title={t('resultPanelDialogTitle')}
+        closeLabel={t('closeResultPanel')}
+        onClose={() => setResultDialogOpen(false)}
+        className="max-w-7xl"
+        contentClassName="p-0"
+      >
+        <div className="h-full p-2 sm:p-4">
+          <AnalysisPanel
+            activeTab={activePanel}
+            locale={locale}
+            modelVisualizationSnapshot={latestModelVisualizationSnapshot}
+            onOpenVisualization={openVisualization}
+            onTabChange={setActivePanel}
+            panelIdPrefix="dialog-output"
+            result={latestResult}
+            t={t}
+            visualizationSnapshot={latestResultVisualizationSnapshot}
+          />
+        </div>
+      </DialogShell>
       {probePopupOpen && Object.keys(probeResults).length > 0 && probeButtonRef.current && typeof window !== 'undefined' && createPortal(
         <>
           <div

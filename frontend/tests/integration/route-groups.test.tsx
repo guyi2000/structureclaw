@@ -4,6 +4,7 @@ import path from 'path'
 import { render, screen } from '@testing-library/react'
 import MarketingLayout from '@/app/(marketing)/layout'
 import ConsoleLayout from '@/app/(console)/layout'
+import { AppStoreProvider } from '@/lib/stores/context'
 
 describe('Route Groups (LAYT-03)', () => {
   describe('Marketing Layout', () => {
@@ -40,9 +41,11 @@ describe('Route Groups (LAYT-03)', () => {
 
     it('console layout brand links back to home', () => {
       render(
-        <ConsoleLayout>
-          <div>Console Content</div>
-        </ConsoleLayout>
+        <AppStoreProvider>
+          <ConsoleLayout>
+            <div>Console Content</div>
+          </ConsoleLayout>
+        </AppStoreProvider>
       )
       expect(screen.getByRole('link', { name: /structureclaw conversational engineering ai/i })).toHaveAttribute('href', '/')
     })
@@ -59,13 +62,15 @@ describe('Route Groups (LAYT-03)', () => {
       expect(content).toContain('ThemeToggle')
     })
 
-    it('console layout links to the global LLM settings page', () => {
+    it('console layout has a button for the LLM settings dialog', () => {
       render(
-        <ConsoleLayout>
-          <div>Console Content</div>
-        </ConsoleLayout>
+        <AppStoreProvider>
+          <ConsoleLayout>
+            <div>Console Content</div>
+          </ConsoleLayout>
+        </AppStoreProvider>
       )
-      expect(screen.getByRole('link', { name: 'LLM' })).toHaveAttribute('href', '/console/llm')
+      expect(screen.getByRole('button', { name: 'LLM' })).toBeInTheDocument()
     })
   })
 
