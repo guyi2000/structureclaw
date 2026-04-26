@@ -2620,6 +2620,11 @@ export function AIConsole() {
         ? payload.messages.flatMap((message): Message[] => {
             // Handle tool messages — these come from persistFullConversationMessages
             if (message.role === 'tool') {
+              let restoredSkillId: string | undefined
+              try {
+                const parsed = JSON.parse(message.content)
+                if (typeof parsed?.skillId === 'string') restoredSkillId = parsed.skillId
+              } catch {}
               return [{
                 id: message.id,
                 role: 'tool' as const,
@@ -2632,6 +2637,7 @@ export function AIConsole() {
                   status: 'done' as const,
                   tool: (message as any).name || 'unknown',
                   title: (message as any).name || 'unknown',
+                  skillId: restoredSkillId,
                   output: message.content,
                   completedAt: message.createdAt,
                 },
