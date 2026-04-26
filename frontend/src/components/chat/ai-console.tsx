@@ -6,7 +6,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '@/lib/stores/context'
 import { MarkdownBody } from './markdown-body'
 import { ToolCallCard } from './tool-call-card'
-import { ArrowUp, Bot, BrainCircuit, Clock3, Cuboid, FileText, Loader2, Maximize2, MessageSquarePlus, Orbit, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, RefreshCw, Sparkles, Square, Trash2, User } from 'lucide-react'
+import { LanguageToggle } from '@/components/language-toggle'
+import { ThemeToggle } from '@/components/theme-toggle'
+import { ArrowUp, Bot, BrainCircuit, Clock3, Cuboid, FileText, Loader2, Maximize2, MessageSquarePlus, Orbit, PanelLeftClose, PanelLeftOpen, PanelRightOpen, RefreshCw, Settings, Sparkles, Square, Trash2, User } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -37,7 +39,7 @@ const StructuralVisualizationModal = dynamic(
 )
 
 type AnalysisType = 'static' | 'dynamic' | 'seismic' | 'nonlinear'
-type PanelTab = 'analysis' | 'report'
+type PanelTab = 'analysis' | 'report' | 'context'
 
 type Message = {
   id: string
@@ -328,14 +330,11 @@ function resolveSkillDomainLabel(domain: SkillDomain, t: (key: MessageKey) => st
 const STORAGE_KEY = 'structureclaw.console.conversations'
 const CONSOLE_UI_PREFERENCES_STORAGE_KEY = 'structureclaw.console.ui-preferences'
 const SIDEBAR_LAYOUT_MIN_WIDTH = 1280
-type ConsoleOutputMode = 'dock' | 'modal'
 type ConsoleUiPreferences = {
   historyCollapsed: boolean
-  outputMode: ConsoleOutputMode
 }
 const DEFAULT_CONSOLE_UI_PREFERENCES: ConsoleUiPreferences = {
   historyCollapsed: false,
-  outputMode: 'dock',
 }
 
 function loadConsoleUiPreferences(): ConsoleUiPreferences {
@@ -357,9 +356,6 @@ function loadConsoleUiPreferences(): ConsoleUiPreferences {
       historyCollapsed: typeof parsed.historyCollapsed === 'boolean'
         ? parsed.historyCollapsed
         : DEFAULT_CONSOLE_UI_PREFERENCES.historyCollapsed,
-      outputMode: parsed.outputMode === 'modal' || parsed.outputMode === 'dock'
-        ? parsed.outputMode
-        : DEFAULT_CONSOLE_UI_PREFERENCES.outputMode,
     }
   } catch {
     return DEFAULT_CONSOLE_UI_PREFERENCES
@@ -1280,6 +1276,10 @@ function AnalysisPanel({
   t,
   locale,
   panelIdPrefix = 'output',
+  modelText,
+  onModelTextChange,
+  modelSyncMessage,
+  parsedComposerModelError,
 }: {
   result: AgentResult | null
   modelVisualizationSnapshot: VisualizationSnapshot | null
@@ -1290,6 +1290,10 @@ function AnalysisPanel({
   t: (key: MessageKey) => string
   locale: AppLocale
   panelIdPrefix?: string
+  modelText?: string
+  onModelTextChange?: (text: string) => void
+  modelSyncMessage?: string
+  parsedComposerModelError?: string | null
 }) {
   const analysis = extractAnalysis(result)
   const stats = extractSummaryStats(analysis, t, locale)
@@ -1300,6 +1304,7 @@ function AnalysisPanel({
   const guidance = result?.interaction
   const hasVisualizationData = Boolean(visualizationSnapshot || modelVisualizationSnapshot)
   const showVisualizationAction = Boolean(result || visualizationSnapshot)
+  const contextTabId = `${panelIdPrefix}-tab-context`
   const analysisTabId = `${panelIdPrefix}-tab-analysis`
   const reportTabId = `${panelIdPrefix}-tab-report`
   const tabPanelId = `${panelIdPrefix}-tabpanel-output`
@@ -1307,7 +1312,7 @@ function AnalysisPanel({
   return (
     <div
       data-testid="console-output-panel"
-      className="flex h-full min-h-[320px] flex-col rounded-[28px] border border-border/70 bg-card/80 backdrop-blur-xl xl:min-h-0 dark:border-white/10 dark:bg-white/5"
+      className="flex h-full min-h-[320px] flex-col bg-card/95 xl:min-h-0 dark:bg-slate-950/90"
     >
       <div className="flex flex-col gap-4 border-b border-border/70 px-5 py-4 sm:flex-row sm:items-start sm:justify-between dark:border-white/10">
         <div>
@@ -1334,20 +1339,26 @@ function AnalysisPanel({
               {!visualizationSnapshot && modelVisualizationSnapshot ? t('visualizationPreviewModel') : t('visualizationOpen')}
             </Button>
           )}
-          <div className="grid w-full grid-cols-2 rounded-2xl border border-border/70 bg-background/70 p-1 sm:w-auto dark:border-white/10 dark:bg-white/5"
-            role="tablist" aria-label={t('tabPanelAnalysisLabel')}
+          <div className="grid w-full grid-cols-3 rounded-2xl border border-border/70 bg-background/70 p-1 sm:w-auto dark:border-white/10 dark:bg-white/5"
+            role="tablist" aria-label={t('workspaceOutput')}
             onKeyDown={(e) => {
-              if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+              const tabs: PanelTab[] = ['context', 'analysis', 'report']
+              const currentIndex = tabs.indexOf(activeTab)
+              const tabCount = tabs.length
+              if (e.key === 'ArrowRight') {
                 e.preventDefault()
-                const nextTab = activeTab === 'analysis' ? 'report' : 'analysis'
+                const nextTab = tabs[(currentIndex + 1) % tabCount]
                 onTabChange(nextTab)
-                requestAnimationFrame(() => {
-                  document.getElementById(nextTab === 'analysis' ? analysisTabId : reportTabId)?.focus()
-                })
+                requestAnimationFrame(() => { document.getElementById(`${panelIdPrefix}-tab-${nextTab}`)?.focus() })
+              } else if (e.key === 'ArrowLeft') {
+                e.preventDefault()
+                const prevTab = tabs[(currentIndex - 1 + tabCount) % tabCount]
+                onTabChange(prevTab)
+                requestAnimationFrame(() => { document.getElementById(`${panelIdPrefix}-tab-${prevTab}`)?.focus() })
               } else if (e.key === 'Home') {
                 e.preventDefault()
-                onTabChange('analysis')
-                requestAnimationFrame(() => { document.getElementById(analysisTabId)?.focus() })
+                onTabChange('context')
+                requestAnimationFrame(() => { document.getElementById(`${panelIdPrefix}-tab-context`)?.focus() })
               } else if (e.key === 'End') {
                 e.preventDefault()
                 onTabChange('report')
@@ -1355,6 +1366,23 @@ function AnalysisPanel({
               }
             }}
           >
+            <button
+              className={cn(
+                'rounded-xl px-4 py-2.5 text-sm font-medium transition',
+                activeTab === 'context'
+                  ? 'bg-foreground text-background shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+              onClick={() => onTabChange('context')}
+              type="button"
+              role="tab"
+              id={`${panelIdPrefix}-tab-context`}
+              aria-selected={activeTab === 'context'}
+              aria-controls={tabPanelId}
+              tabIndex={activeTab === 'context' ? 0 : -1}
+            >
+              {t('contextTab')}
+            </button>
             <button
               className={cn(
                 'rounded-xl px-4 py-2.5 text-sm font-medium transition',
@@ -1393,7 +1421,7 @@ function AnalysisPanel({
         </div>
       </div>
 
-      <div data-testid="console-output-scroll" className="flex-1 overflow-auto p-5 xl:min-h-0" role="tabpanel" id={tabPanelId} aria-labelledby={activeTab === 'analysis' ? analysisTabId : reportTabId}>
+      <div data-testid="console-output-scroll" className={cn('flex-1 overflow-auto p-5 xl:min-h-0', activeTab === 'context' && 'flex flex-col')} role="tabpanel" id={tabPanelId} aria-labelledby={activeTab === 'context' ? contextTabId : activeTab === 'analysis' ? analysisTabId : reportTabId}>
         {!result && (
           <Card className="border-border/70 bg-card/85 text-foreground shadow-none dark:border-white/10 dark:bg-slate-950/40">
             <CardHeader>
@@ -1661,6 +1689,53 @@ function AnalysisPanel({
             </Card>
           </div>
         )}
+
+        {activeTab === 'context' && (
+          <div className="flex h-full flex-col">
+            <Card className="flex flex-1 flex-col border-border/70 bg-card/85 text-foreground shadow-none dark:border-white/10 dark:bg-slate-950/50">
+              <CardHeader className="shrink-0">
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <Cuboid className="h-5 w-5 text-cyan-500 dark:text-cyan-300" />
+                  {t('contextSectionModel')}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="flex min-h-0 flex-1 flex-col gap-3">
+                <p className="shrink-0 text-xs leading-5 text-muted-foreground">{t('contextSectionModelHelp')}</p>
+                {modelVisualizationSnapshot && (
+                  <Button
+                    type="button"
+                    className="shrink-0 rounded-2xl border border-cyan-300/35 bg-cyan-300/10 px-4 text-cyan-800 hover:bg-cyan-300/20 dark:text-cyan-100"
+                    onClick={() => onOpenVisualization('model')}
+                  >
+                    <Cuboid className="h-4 w-4" />
+                    {t('visualizationPreviewModel')}
+                  </Button>
+                )}
+                <Textarea
+                  className="min-h-0 flex-1 resize-none rounded-xl border border-border/70 bg-background/70 font-mono text-xs dark:border-white/10 dark:bg-white/5"
+                  placeholder={t('modelJsonPlaceholder')}
+                  value={modelText || ''}
+                  onChange={(e) => onModelTextChange?.(e.target.value)}
+                />
+                {modelSyncMessage && (
+                  <div className="shrink-0 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-3 py-2 text-xs leading-5 text-cyan-900 dark:text-cyan-100">
+                    {modelSyncMessage}
+                  </div>
+                )}
+                {parsedComposerModelError ? (
+                  <div className="shrink-0 rounded-2xl border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-xs leading-5 text-amber-900 dark:text-amber-100">
+                    {parsedComposerModelError}
+                    {modelVisualizationSnapshot ? ` ${t('visualizationModelInvalidKeepingLast')}` : ''}
+                  </div>
+                ) : modelVisualizationSnapshot ? (
+                  <div className="shrink-0 text-xs leading-5 text-muted-foreground">
+                    {t('visualizationModelPreviewHelp')}
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -1707,7 +1782,6 @@ export function AIConsole() {
   const [isStreaming, setIsStreaming] = useState(false)
   useEffect(() => { conversationIdRef.current = conversationId }, [conversationId])
   const [errorMessage, setErrorMessage] = useState('')
-  const [contextOpen, setContextOpen] = useState(false)
   const [modelText, setModelText] = useState('')
   const [modelSyncMessage, setModelSyncMessage] = useState('')
   const [availableSkills, setAvailableSkills] = useState<AgentSkillSummary[]>([])
@@ -1746,16 +1820,8 @@ export function AIConsole() {
   // Interaction option chips from ask_user_clarification
   const [pendingOptions, setPendingOptions] = useState<string[]>([])
 
-  const outputMode = uiPreferences.outputMode
 
   const messageRenderGroups = useMemo(() => groupMessagesForRendering(messages), [messages])
-
-  function setOutputMode(nextMode: ConsoleOutputMode) {
-    setUiPreferences((current) => ({
-      ...current,
-      outputMode: nextMode,
-    }))
-  }
 
   useEffect(() => {
     setUiPreferences(loadConsoleUiPreferences())
@@ -2076,6 +2142,8 @@ export function AIConsole() {
   const [probePopupOpen, setProbePopupOpen] = useState(false)
   const [probeAllRunning, setProbeAllRunning] = useState(false)
   const probeButtonRef = useRef<HTMLButtonElement>(null)
+  const [gearMenuOpen, setGearMenuOpen] = useState(false)
+  const gearButtonRef = useRef<HTMLButtonElement>(null)
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null)
 
   async function probeAllEngines() {
@@ -2841,7 +2909,8 @@ export function AIConsole() {
     }
     if (source === 'conversation') {
       setModelSyncMessage(t('modelSyncFromChat'))
-      setContextOpen(true)
+      setActivePanel('context')
+      setResultDialogOpen(true)
     }
     setErrorMessage('')
   }
@@ -2856,7 +2925,8 @@ export function AIConsole() {
     const parsedModel = parseModelJson(modelText, t)
     if (parsedModel.error) {
       setErrorMessage(parsedModel.error)
-      setContextOpen(true)
+      setActivePanel('context')
+      setResultDialogOpen(true)
     }
     const contextModel = parsedModel.error ? undefined : parsedModel.model
     const resumeFromMessage = resolveResumeFromMessage(messagesRef.current, trimmedInput)
@@ -3447,31 +3517,126 @@ export function AIConsole() {
   }
 
   const historyCollapsed = uiPreferences.historyCollapsed && isSidebarLayout
+  const isIdle = messages.length <= 1
+
+  // ── Composer input (shared between idle and active layouts) ──
+  const composerInput = (
+    <div className="rounded-[24px] border border-border/70 bg-background/70 p-2.5 dark:border-white/10 dark:bg-black/20">
+      <Textarea
+        ref={composerTextareaRef}
+        className="min-h-[96px] resize-none border-0 bg-transparent px-3 py-2.5 text-base text-foreground placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
+        placeholder={t('composerPlaceholder')}
+        value={input}
+        onChange={(event) => setInput(event.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault()
+            handleSubmit()
+          }
+        }}
+      />
+      <Separator className="bg-border dark:bg-white/10" />
+      <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge className="border-border/70 bg-background/70 text-muted-foreground dark:border-white/10 dark:bg-white/5" variant="outline">
+            {t('conversationIdShort')} {conversationId ? conversationId.slice(0, 8) : t('notCreated')}
+          </Badge>
+          {allEngines.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              {allEngines.map((engine) => {
+                const probe = probeResults[engine.id]
+                const dotColor = probe
+                  ? (probe.loading ? 'bg-amber-400 dark:bg-amber-300' : (probe.passed ? 'bg-emerald-500 dark:bg-emerald-400' : 'bg-red-400 dark:bg-red-500'))
+                  : 'bg-gray-400 dark:bg-gray-500'
+                return (
+                  <span
+                    key={engine.id}
+                    className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"
+                    title={probe ? undefined : (engine.unavailableReason || (engine.available ? t('engineStatusAvailable') : t('engineStatusUnavailable')))}
+                  >
+                    <span className={`inline-block h-1.5 w-1.5 rounded-full ${dotColor}`} />
+                    <span className={probe ? (probe.passed ? '' : 'opacity-50') : 'opacity-60'}>{engine.name}</span>
+                  </span>
+                )
+              })}
+              <div className="relative ml-1">
+                <button
+                  ref={probeButtonRef}
+                  type="button"
+                  aria-haspopup="dialog"
+                  aria-expanded={probePopupOpen}
+                  className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-background/70 px-2 py-0.5 text-[11px] text-muted-foreground transition hover:border-cyan-300/30 hover:text-foreground disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
+                  onClick={() => {
+                    const hasResults = Object.keys(probeResults).length > 0
+                    if (hasResults) {
+                      setProbePopupOpen((v) => !v)
+                    } else {
+                      probeAllEngines()
+                    }
+                  }}
+                  disabled={probeAllRunning}
+                >
+                  {probeAllRunning ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                  {t('engineProbeButton')}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {!isIdle && (
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-full text-xs"
+              onClick={() => setResultDialogOpen(true)}
+            >
+              <PanelRightOpen className="h-3.5 w-3.5" />
+              {t('showResults')}
+            </Button>
+          )}
+          {streamingSessions.get(conversationId)?.status === 'streaming' ? (
+            <Button
+              type="button"
+              className="rounded-full bg-rose-500 px-5 text-white hover:bg-rose-400"
+              onClick={() => stopStream()}
+            >
+              <Square className="h-4 w-4" />
+              {t('stopStreaming')}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              className="rounded-full bg-cyan-300 px-5 text-slate-950 hover:bg-cyan-200"
+              onClick={() => handleSubmit()}
+              disabled={!input.trim() || submittingRef.current}
+            >
+              <ArrowUp className="h-4 w-4" />
+              {t('sendMessage')}
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+
+  const gridCols = historyCollapsed
+    ? 'xl:grid-cols-[72px_minmax(0,1fr)] 2xl:grid-cols-[80px_minmax(0,1fr)]'
+    : 'xl:grid-cols-[260px_minmax(0,1fr)] 2xl:grid-cols-[280px_minmax(0,1fr)]'
 
   return (
     <div
       data-testid="console-layout-grid"
       data-history-collapsed={String(historyCollapsed)}
-      data-output-mode={outputMode}
       className={cn(
-        'grid min-h-[calc(100vh-5.5rem)] gap-3 xl:gap-4 xl:h-full xl:min-h-0 xl:overflow-hidden transition-[grid-template-columns] duration-300 ease-in-out',
-        outputMode === 'modal'
-          ? (
-              historyCollapsed
-                ? 'xl:grid-cols-[72px_minmax(0,1fr)] 2xl:grid-cols-[80px_minmax(0,1fr)]'
-                : 'xl:grid-cols-[260px_minmax(0,1fr)] 2xl:grid-cols-[280px_minmax(0,1fr)]'
-            )
-          : (
-              historyCollapsed
-                ? 'xl:grid-cols-[72px_minmax(0,2.6fr)_420px] 2xl:grid-cols-[80px_minmax(0,2.8fr)_460px]'
-                : 'xl:grid-cols-[260px_minmax(0,2.2fr)_420px] 2xl:grid-cols-[280px_minmax(0,2.4fr)_460px]'
-            )
+        'grid h-full min-h-screen xl:min-h-0 xl:overflow-hidden transition-[grid-template-columns] duration-300 ease-in-out',
+        gridCols
       )}
     >
       <aside
         data-testid="console-history-panel"
         className={cn(
-          'flex h-full flex-col rounded-[28px] border border-border/70 bg-card/80 backdrop-blur-xl xl:min-h-0 dark:border-white/10 dark:bg-white/5',
+          'flex h-full flex-col bg-card/95 xl:min-h-0 dark:bg-slate-950/90',
           historyCollapsed ? 'min-h-[220px] items-center px-2 py-4' : 'min-h-[320px]'
         )}
       >
@@ -3487,31 +3652,60 @@ export function AIConsole() {
             >
               <PanelLeftOpen className="h-4 w-4" />
             </Button>
+            <button
+              type="button"
+              className="mt-2 h-9 w-9 rounded-lg overflow-hidden"
+              aria-label={t('expandHistoryPanel')}
+              onClick={() => setUiPreferences((current) => ({ ...current, historyCollapsed: false }))}
+            >
+              <img
+                src="/logo.png"
+                alt=""
+                className="h-full w-full object-cover opacity-90"
+              />
+            </button>
             <Button
               type="button"
               size="icon"
-              className="mt-3 h-10 w-10 rounded-full bg-cyan-300 text-slate-950 hover:bg-cyan-200"
+              className="mt-2 h-10 w-10 rounded-full bg-cyan-300 text-slate-950 hover:bg-cyan-200"
               aria-label={t('newConversation')}
               onClick={handleNewConversation}
             >
               <MessageSquarePlus className="h-4 w-4" />
             </Button>
-            <div className="mt-5 flex flex-1 items-center justify-center">
-              <div className="flex items-center gap-3 [writing-mode:vertical-rl]">
-                <span className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-700/80 dark:text-cyan-200/70">
-                  {t('historyCollapsedTitle')}
-                </span>
-                <span className="sr-only">{t('historyCollapsedBody')}</span>
-              </div>
+            <div className="mt-4 flex flex-1 items-center justify-center">
+              <span className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-700/80 dark:text-cyan-200/70 [writing-mode:vertical-rl]">
+                StructureClaw
+              </span>
+            </div>
+            <div className="mt-auto pt-3 flex flex-col items-center gap-2">
+              <span className="text-[10px] text-muted-foreground text-center leading-tight">
+                {loadedModules.length} · {loadedTools.length}
+              </span>
+              <button
+                ref={gearButtonRef}
+                type="button"
+                className="h-9 w-9 rounded-full text-muted-foreground hover:bg-cyan-300/10 hover:text-foreground"
+                aria-label={t('sidebarGearAriaLabel')}
+                aria-haspopup="menu"
+                aria-expanded={gearMenuOpen}
+                onClick={() => setGearMenuOpen((v) => !v)}
+              >
+                <Settings className="h-4 w-4" />
+              </button>
             </div>
           </>
         ) : (
           <>
-            <div className="border-b border-border/70 px-5 py-4 dark:border-white/10">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.24em] text-cyan-700/80 dark:text-cyan-200/70">{t('conversationMemory')}</p>
-                  <h2 className="mt-1 text-lg font-semibold text-foreground">{t('conversationHistory')}</h2>
+            <div className="px-5 py-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <img
+                    src="/logo.png"
+                    alt="StructureClaw"
+                    className="h-8 w-8 rounded-lg opacity-90"
+                  />
+                  <span className="text-xs uppercase tracking-[0.28em] text-cyan-700/80 dark:text-cyan-200/70">StructureClaw</span>
                 </div>
                 <Button
                   type="button"
@@ -3524,9 +3718,6 @@ export function AIConsole() {
                   <PanelLeftClose className="h-4 w-4" />
                 </Button>
               </div>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                {t('conversationHistoryDesc')}
-              </p>
               <Button
                 type="button"
                 className="mt-4 w-full rounded-full bg-cyan-300 text-slate-950 hover:bg-cyan-200"
@@ -3650,60 +3841,83 @@ export function AIConsole() {
                 })}
               </div>
             </div>
+            <div className="mt-auto border-t border-border/70 px-5 py-4 dark:border-white/10">
+              <button
+                type="button"
+                className="w-full text-left text-xs text-muted-foreground hover:text-foreground transition"
+                onClick={() => openWorkspaceSettings('capabilities')}
+              >
+                {t('sidebarCapabilitySummary')
+                  .replace('{skillCount}', String(loadedModules.length))
+                  .replace('{toolCount}', String(loadedTools.length))}
+              </button>
+              <div className="mt-3">
+                <button
+                  ref={gearButtonRef}
+                  type="button"
+                  className="h-9 w-9 rounded-full text-muted-foreground hover:bg-cyan-300/10 hover:text-foreground"
+                  aria-label={t('sidebarGearAriaLabel')}
+                  aria-haspopup="menu"
+                  aria-expanded={gearMenuOpen}
+                  onClick={() => setGearMenuOpen((v) => !v)}
+                >
+                  <Settings className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
           </>
         )}
       </aside>
 
-      <section
+      <div className="flex min-h-0 flex-col xl:min-h-0">
+        <div className="flex items-center justify-end gap-1.5 px-3 py-2">
+          <LanguageToggle />
+          <ThemeToggle />
+        </div>
+
+        <section
         data-testid="console-chat-panel"
-        className="relative flex h-full flex-col overflow-hidden rounded-[32px] border border-border/70 bg-card/85 shadow-[0_40px_120px_-50px_rgba(34,211,238,0.2)] backdrop-blur-xl xl:min-h-0 dark:border-white/10 dark:bg-slate-950/70 dark:shadow-[0_40px_120px_-50px_rgba(34,211,238,0.45)]"
+        className="relative flex h-full flex-col overflow-hidden border-x border-border/50 bg-card/95 xl:min-h-0 dark:border-white/5 dark:bg-slate-950/90"
       >
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.18),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(249,115,22,0.12),transparent_30%)] dark:bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.22),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(249,115,22,0.18),transparent_30%)]" />
-        <div className="relative flex h-full min-h-[320px] flex-col xl:min-h-0">
-          <div className="border-b border-border/70 px-4 py-3 2xl:px-5 2xl:py-4 dark:border-white/10">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-xs uppercase tracking-[0.28em] text-cyan-700/80 dark:text-cyan-200/70">{t('aiConsoleEyebrow')}</p>
-                <h1 className="mt-1 text-2xl font-semibold text-foreground">{t('aiConsoleTitle')}</h1>
+        {isIdle ? (
+          /* ── Idle state: centered welcome + composer ── */
+          <div className="flex h-full flex-col items-center justify-center px-4">
+            <div className="w-full max-w-3xl flex flex-col items-center gap-8 py-12">
+              <div className="flex flex-col items-center gap-3">
+                <img
+                  src="/logo.png"
+                  alt="StructureClaw"
+                  className="h-14 w-14 rounded-2xl opacity-90"
+                />
+                <h1 className="text-2xl font-semibold text-foreground">{t('welcomeHeading')}</h1>
+                <p className="text-sm text-muted-foreground text-center max-w-md leading-relaxed">{t('welcomeMessage')}</p>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {outputMode === 'modal' && (
-                  <Button
+              <div className="w-full grid gap-3 sm:grid-cols-3">
+                {quickPrompts.map((prompt) => (
+                  <button
+                    key={prompt}
                     type="button"
-                    variant="outline"
-                    className="rounded-full border-cyan-300/35 bg-cyan-300/10 text-cyan-800 hover:bg-cyan-300/20 dark:text-cyan-100"
-                    onClick={() => setResultDialogOpen(true)}
+                    onClick={() => setInput(prompt)}
+                    className="rounded-2xl border border-border/70 bg-background/70 p-4 text-left text-sm text-muted-foreground transition hover:border-cyan-300/40 hover:bg-cyan-300/10 hover:text-foreground dark:border-white/10 dark:bg-white/5 dark:hover:text-white"
                   >
-                    <PanelRightOpen className="h-4 w-4" />
-                    {t('openResultPanel')}
-                  </Button>
-                )}
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="rounded-full"
-                  onClick={() => setOutputMode(outputMode === 'dock' ? 'modal' : 'dock')}
-                >
-                  {outputMode === 'dock' ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
-                  {outputMode === 'dock' ? t('usePopupResults') : t('dockResultPanel')}
-                </Button>
-                <Badge className="border-cyan-400/20 bg-cyan-400/10 text-cyan-700 dark:text-cyan-100" variant="outline">
-                  {t('aiConsoleBadgePrimary')}
-                </Badge>
-                <Badge className="border-border/70 bg-background/70 text-muted-foreground dark:border-white/10 dark:bg-white/5" variant="outline">
-                  {t('aiConsoleBadgeSecondary')}
-                </Badge>
+                    <Sparkles className="mb-3 h-4 w-4 text-cyan-500 dark:text-cyan-300" />
+                    {prompt}
+                  </button>
+                ))}
               </div>
-            </div>
-            <p className="mt-3 max-w-5xl text-sm leading-6 text-muted-foreground">
-              {t('aiConsoleIntro')}
-            </p>
-            <div className="mt-4 max-w-5xl rounded-[22px] border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground dark:border-white/10 dark:bg-white/5">
-              <div className="font-medium text-foreground">{t('databaseAdminConsoleCardTitle')}</div>
-              <div className="mt-1 leading-6">{t('databaseAdminConsoleCardBody')}</div>
+              <div className="w-full space-y-3">
+                {errorMessage && (
+                  <div role="alert" className="rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
+                    {errorMessage}
+                  </div>
+                )}
+                {composerInput}
+              </div>
             </div>
           </div>
-
+        ) : (
+        /* ── Active state: chat messages + composer ── */
+        <div className="relative flex h-full min-h-[320px] flex-col xl:min-h-0">
           <div
             ref={chatScrollRef}
             data-testid="console-chat-scroll"
@@ -3787,7 +4001,7 @@ export function AIConsole() {
                           )}
                         </div>
                         {group.tools.length > 0 ? (
-                          <div className="ml-4 space-y-2 border-l border-cyan-300/30 pl-4">
+                          <div className="space-y-2">
                             {group.tools.map((toolMessage) => (
                               toolMessage.toolStep ? (
                                 <ToolCallCard key={toolMessage.id} step={toolMessage.toolStep} t={t} attached />
@@ -3814,17 +4028,21 @@ export function AIConsole() {
                   {/* Tool message — compact card, aligned with grouped tools */}
                   {message.role === 'tool' && (
                     <>
-                      <div className="w-10 shrink-0" />
-                      <div className="max-w-[82%]">
-                        {message.toolStep && (
-                          <ToolCallCard step={message.toolStep} t={t} />
-                        )}
-                        {message.status === 'streaming' && !message.toolStep && (
-                          <span className="inline-flex items-center gap-1.5" role="status">
-                            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-500 dark:bg-cyan-400" />
-                            <span className="text-xs text-muted-foreground animate-pulse">{t('streamingInProgress')}</span>
-                          </span>
-                        )}
+                      <div className="mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-cyan-400/15 text-cyan-700 dark:text-cyan-200">
+                        <Bot className="h-5 w-5" />
+                      </div>
+                      <div className="max-w-[88%] space-y-2">
+                        <div className="space-y-2">
+                          {message.toolStep && (
+                            <ToolCallCard step={message.toolStep} t={t} attached />
+                          )}
+                          {message.status === 'streaming' && !message.toolStep && (
+                            <span className="inline-flex items-center gap-1.5" role="status">
+                              <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-500 dark:bg-cyan-400" />
+                              <span className="text-xs text-muted-foreground animate-pulse">{t('streamingInProgress')}</span>
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </>
                   )}
@@ -4092,235 +4310,14 @@ export function AIConsole() {
                   {errorMessage}
                 </div>
               )}
-
-              <div className="rounded-[24px] border border-border/70 bg-background/70 p-2.5 dark:border-white/10 dark:bg-black/20">
-                <div className="mb-2 rounded-[18px] border border-border/70 bg-card/60 px-3 py-3 dark:border-white/10 dark:bg-white/5">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-sm font-medium text-foreground">{t('capabilitySettingsSummaryTitle')}</p>
-                        <button
-                          type="button"
-                          title={t('skillVsToolSkillHelp')}
-                          className="rounded-full border border-border/70 bg-background/70 px-2 py-0.5 text-[11px] text-muted-foreground dark:border-white/10 dark:bg-white/5"
-                        >
-                          {t('skillShortLabel')}
-                        </button>
-                        <button
-                          type="button"
-                          title={t('skillVsToolToolHelp')}
-                          className="rounded-full border border-border/70 bg-background/70 px-2 py-0.5 text-[11px] text-muted-foreground dark:border-white/10 dark:bg-white/5"
-                        >
-                          {t('toolShortLabel')}
-                        </button>
-                      </div>
-                      <p className="mt-1 text-xs leading-5 text-muted-foreground hidden 2xl:block">{t('capabilitySettingsSummaryBody')}</p>
-                    </div>
-                    <button
-                      type="button"
-                      className="rounded-full border border-cyan-300/35 bg-cyan-300/10 px-4 py-2 text-sm text-cyan-800 transition hover:bg-cyan-300/20 dark:text-cyan-100"
-                      onClick={() => openWorkspaceSettings('capabilities')}
-                    >
-                      {t('capabilitySettingsOpen')}
-                    </button>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Badge variant="outline" className="text-[10px]">
-                      {t('loadedSkillsTitle')}: {loadedModules.length}
-                    </Badge>
-                    <Badge variant="outline" className="text-[10px]">
-                      {t('loadedToolsTitle')}: {loadedTools.length}
-                    </Badge>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {loadedModules.slice(0, 4).map((module) => (
-                      <div
-                        key={module.id}
-                        className="flex items-center gap-2 rounded-full border border-border/70 bg-background/70 px-3 py-1.5 text-xs dark:border-white/10 dark:bg-black/20"
-                      >
-                        <span className="font-medium text-foreground">{module.label}</span>
-                        <span className="text-muted-foreground">{resolveSkillDomainLabel(module.domain, t)}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {loadedTools.slice(0, 6).map((tool) => (
-                      <div
-                        key={tool.id}
-                        className="flex items-center gap-2 rounded-full border border-border/70 bg-background/70 px-3 py-1.5 text-[11px] dark:border-white/10 dark:bg-black/20"
-                      >
-                        <span className="text-muted-foreground">{tool.label}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <Textarea
-                  ref={composerTextareaRef}
-                  className="min-h-[96px] resize-none border-0 bg-transparent px-3 py-2.5 text-base text-foreground placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
-                  placeholder={t('composerPlaceholder')}
-                  value={input}
-                  onChange={(event) => setInput(event.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                      e.preventDefault()
-                      handleSubmit()
-                    }
-                  }}
-                />
-                <Separator className="bg-border dark:bg-white/10" />
-
-                <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      className="rounded-full border border-border bg-background/70 px-3 py-1.5 text-sm text-muted-foreground transition hover:border-cyan-300/30 hover:text-foreground dark:border-white/10 dark:bg-white/5 dark:hover:text-white"
-                      onClick={() => setContextOpen((current) => !current)}
-                      aria-expanded={contextOpen}
-                      aria-controls={contextOpen ? 'context-section' : undefined}
-                    >
-                      {contextOpen ? t('collapseContext') : t('expandContext')}
-                    </button>
-                    <Badge className="border-border/70 bg-background/70 text-muted-foreground dark:border-white/10 dark:bg-white/5" variant="outline">
-                      {t('conversationIdShort')} {conversationId ? conversationId.slice(0, 8) : t('notCreated')}
-                    </Badge>
-                    {allEngines.length > 0 && (
-                      <div className="flex items-center gap-1.5">
-                        {allEngines.map((engine) => {
-                          const probe = probeResults[engine.id]
-                          const dotColor = probe
-                            ? (probe.loading ? 'bg-amber-400 dark:bg-amber-300' : (probe.passed ? 'bg-emerald-500 dark:bg-emerald-400' : 'bg-red-400 dark:bg-red-500'))
-                            : 'bg-gray-400 dark:bg-gray-500'
-                          return (
-                            <span
-                              key={engine.id}
-                              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"
-                              title={probe ? undefined : (engine.unavailableReason || (engine.available ? t('engineStatusAvailable') : t('engineStatusUnavailable')))}
-                            >
-                              <span className={`inline-block h-1.5 w-1.5 rounded-full ${dotColor}`} />
-                              <span className={probe ? (probe.passed ? '' : 'opacity-50') : 'opacity-60'}>{engine.name}</span>
-                            </span>
-                          )
-                        })}
-                        <div className="relative ml-1">
-                          <button
-                            ref={probeButtonRef}
-                            type="button"
-                            aria-haspopup="dialog"
-                            aria-expanded={probePopupOpen}
-                            className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-background/70 px-2 py-0.5 text-[11px] text-muted-foreground transition hover:border-cyan-300/30 hover:text-foreground disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
-                            onClick={() => {
-                              const hasResults = Object.keys(probeResults).length > 0
-                              if (hasResults) {
-                                setProbePopupOpen((v) => !v)
-                              } else {
-                                probeAllEngines()
-                              }
-                            }}
-                            disabled={probeAllRunning}
-                          >
-                            {probeAllRunning ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-                            {t('engineProbeButton')}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    {streamingSessions.get(conversationId)?.status === 'streaming' ? (
-                      <Button
-                        type="button"
-                        className="rounded-full bg-rose-500 px-5 text-white hover:bg-rose-400"
-                        onClick={() => stopStream()}
-                      >
-                        <Square className="h-4 w-4" />
-                        {t('stopStreaming')}
-                      </Button>
-                    ) : (
-                      <Button
-                        type="button"
-                        className="rounded-full bg-cyan-300 px-5 text-slate-950 hover:bg-cyan-200"
-                        onClick={() => handleSubmit()}
-                        disabled={!input.trim() || submittingRef.current}
-                      >
-                        <ArrowUp className="h-4 w-4" />
-                        {t('sendMessage')}
-                      </Button>
-                    )}
-                  </div>
-                </div>
-
-                {contextOpen && (
-                  <div id="context-section" role="region" aria-label={t('contextPanelLabel')} className="mt-3 max-h-[50vh] overflow-y-auto rounded-[24px] border border-border/70 bg-background/70 p-4 dark:border-white/10 dark:bg-white/5">
-                    <div className="space-y-2">
-                      <div>
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div>
-                            <div className="text-sm font-semibold text-foreground">{t('contextSectionModel')}</div>
-                            <div className="text-xs leading-5 text-muted-foreground">{t('contextSectionModelHelp')}</div>
-                          </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="rounded-full border-cyan-300/35 bg-cyan-300/10 text-cyan-800 hover:bg-cyan-300/20 dark:text-cyan-100"
-                            disabled={!latestModelVisualizationSnapshot}
-                            onClick={() => openVisualization('model')}
-                            title={!latestModelVisualizationSnapshot ? t('visualizationMissingModel') : t('visualizationModelPreviewHelp')}
-                          >
-                            <Cuboid className="h-4 w-4" />
-                            {t('visualizationPreviewModel')}
-                          </Button>
-                        </div>
-                      </div>
-                      <label className="text-sm font-medium text-foreground">{t('modelJsonLabel')}</label>
-                      <Textarea
-                        className="min-h-[160px] resize-y border-border/70 bg-card/80 text-sm text-foreground placeholder:text-muted-foreground dark:border-white/10 dark:bg-slate-950/70"
-                        placeholder={t('modelJsonPlaceholder')}
-                        value={modelText}
-                        onChange={(event) => {
-                          setModelText(event.target.value)
-                          setModelSyncMessage('')
-                        }}
-                      />
-                      {modelSyncMessage ? (
-                        <div className="rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-3 py-2 text-xs leading-5 text-cyan-900 dark:text-cyan-100">
-                          {modelSyncMessage}
-                        </div>
-                      ) : null}
-                      {parsedComposerModelError ? (
-                        <div className="rounded-2xl border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-xs leading-5 text-amber-900 dark:text-amber-100">
-                          {parsedComposerModelError}
-                          {latestModelVisualizationSnapshot ? ` ${t('visualizationModelInvalidKeepingLast')}` : ''}
-                        </div>
-                      ) : latestModelVisualizationSnapshot ? (
-                        <div className="text-xs leading-5 text-muted-foreground">
-                          {t('visualizationModelPreviewHelp')}
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                )}
-              </div>
+              {composerInput}
             </div>
           </div>
         </div>
+        )}
       </section>
+      </div>
 
-      {outputMode === 'dock' && (
-        <div data-testid="console-output-dock" className="xl:min-h-0">
-          <AnalysisPanel
-            activeTab={activePanel}
-            locale={locale}
-            modelVisualizationSnapshot={latestModelVisualizationSnapshot}
-            onOpenVisualization={openVisualization}
-            onTabChange={setActivePanel}
-            panelIdPrefix="dock-output"
-            result={latestResult}
-            t={t}
-            visualizationSnapshot={latestResultVisualizationSnapshot}
-          />
-        </div>
-      )}
       <StructuralVisualizationModal
         locale={locale}
         onClose={() => setVisualizationOpen(false)}
@@ -4347,6 +4344,10 @@ export function AIConsole() {
             result={latestResult}
             t={t}
             visualizationSnapshot={latestResultVisualizationSnapshot}
+            modelText={modelText}
+            onModelTextChange={(val) => { setModelText(val); setModelSyncMessage('') }}
+            modelSyncMessage={modelSyncMessage}
+            parsedComposerModelError={parsedComposerModelError}
           />
         </div>
       </DialogShell>
@@ -4423,6 +4424,44 @@ export function AIConsole() {
                 )
               })}
             </div>
+          </div>
+        </>,
+        document.body,
+      )}
+      {gearMenuOpen && gearButtonRef.current && typeof window !== 'undefined' && createPortal(
+        <>
+          <div
+            className="fixed inset-0 z-[70]"
+            onClick={() => setGearMenuOpen(false)}
+          />
+          <div
+            role="menu"
+            aria-label={t('sidebarGearAriaLabel')}
+            tabIndex={-1}
+            autoFocus
+            onKeyDown={(e) => { if (e.key === 'Escape') setGearMenuOpen(false) }}
+            className="fixed z-[71] w-48 rounded-xl border border-border/70 bg-card p-2 shadow-xl dark:border-white/10 dark:bg-slate-950"
+            style={{
+              bottom: window.innerHeight - gearButtonRef.current.getBoundingClientRect().top + 8,
+              left: Math.max(0, gearButtonRef.current.getBoundingClientRect().left),
+            }}
+          >
+            {(['capabilities', 'llm', 'database'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                role="menuitem"
+                className="w-full rounded-lg px-3 py-2 text-left text-sm text-foreground hover:bg-cyan-300/10 transition"
+                onClick={() => {
+                  openWorkspaceSettings(tab)
+                  setGearMenuOpen(false)
+                }}
+              >
+                {tab === 'capabilities' && t('sidebarGearMenuCapabilities')}
+                {tab === 'llm' && t('sidebarGearMenuLlm')}
+                {tab === 'database' && t('sidebarGearMenuDatabase')}
+              </button>
+            ))}
           </div>
         </>,
         document.body,

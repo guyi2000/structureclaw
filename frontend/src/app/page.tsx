@@ -1,6 +1,6 @@
 import { AIConsole } from '@/components/chat'
 
-export default function ConsolePage() {
+export default function HomePage() {
   return (
     <div className="h-full">
       <AIConsole />
