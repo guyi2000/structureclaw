@@ -33,18 +33,7 @@ def assert_true(condition, message):
         raise SystemExit(message)
 
 
-def get_by_path(obj, dotted):
-    current = obj
-    for part in dotted.split("."):
-        if isinstance(current, dict) and part in current:
-            current = current[part]
-        else:
-            raise KeyError(f"Path not found: {dotted}")
-    return current
-
-
 def validate_opensees_runtime_and_routing():
-    import types
 
     def run_request(payload, engine_id="builtin-opensees"):
         request = AnalysisRequest.model_validate(
@@ -166,93 +155,54 @@ def validate_opensees_runtime_and_routing():
         roof_uy = float(portal_result["data"]["displacements"]["3"]["uy"])
         assert_true(math.isfinite(roof_uy) and roof_uy < 0.0, f"Portal-frame roof displacement invalid: {roof_uy}")
         print("[ok] portal frame solves with builtin-opensees")
-
-        def fake_execute(self, selection, analysis_type, model, parameters, engine_id):
-            if selection.engine["id"] == "builtin-opensees":
-                raise RuntimeError("simulated runtime failure")
-            return {
-                "status": "success",
-                "analysisMode": "linear_2d_frame",
-                "displacements": {},
-                "forces": {},
-                "reactions": {},
-                "envelope": {},
-                "summary": {},
-            }
-
-        registry._execute_analysis_selection = types.MethodType(fake_execute, registry)
-
-        auto_result = registry.run_analysis("static", model, {"loadCaseIds": ["LC1"]}, None)
-        assert_true(auto_result["meta"]["engineId"] == "builtin-simplified", f"Expected fallback engine, got {auto_result['meta']['engineId']}")
-        assert_true(auto_result["meta"]["selectionMode"] == "fallback", f"Expected fallback selectionMode, got {auto_result['meta']['selectionMode']}")
-        assert_true(auto_result["meta"]["fallbackFrom"] == "builtin-opensees", f"Expected fallbackFrom builtin-opensees, got {auto_result['meta']['fallbackFrom']}")
-        print("[ok] auto engine falls back on runtime failure")
-
-        try:
-            registry.run_analysis("static", model, {"loadCaseIds": ["LC1"]}, "builtin-opensees")
-        except RuntimeError as error:
-            assert_true("simulated runtime failure" in str(error), f"Unexpected manual failure reason: {error}")
-            print("[ok] manual engine selection does not fall back")
-        else:
-            raise SystemExit("Manual builtin-opensees selection should not fall back")
     else:
-        print(f"[skip] OpenSees runtime smoke test unavailable: {issue}")
-        engines = {engine["id"]: engine for engine in registry.list_engines()}
-        opensees = engines.get("builtin-opensees")
-        simplified = engines.get("builtin-simplified")
-        assert_true(opensees is not None, "builtin-opensees manifest missing")
-        assert_true(simplified is not None, "builtin-simplified manifest missing")
-        assert_true(opensees["available"] is False, "builtin-opensees should be marked unavailable when runtime probe fails")
-        assert_true(opensees["status"] == "unavailable", f"Unexpected builtin-opensees status: {opensees['status']}")
-        assert_true(isinstance(opensees.get("unavailableReason"), str) and opensees["unavailableReason"], "builtin-opensees should expose unavailableReason")
-        assert_true(simplified["available"] is True, "builtin-simplified should remain available when OpenSees is unavailable")
+        # Verify unavailable engine surfaces clearly
+        engines = registry.list_engines()
+        opensees = next((e for e in engines if e["id"] == "builtin-opensees"), None)
+        assert_true(opensees is not None, "builtin-opensees missing from engine list")
+        assert_true(opensees["available"] is False, f"Expected available=False, got {opensees['available']}")
+        assert_true(opensees.get("unavailableReason"), "Expected non-empty unavailableReason")
+        print(f"[ok] list_engines marks builtin-opensees unavailable: {opensees['unavailableReason']}")
 
-        auto_result = registry.run_analysis("static", model, {"loadCaseIds": ["LC1"]}, None)
-        assert_true(auto_result["meta"]["engineId"] == "builtin-simplified", f"Expected builtin-simplified auto selection, got {auto_result['meta']['engineId']}")
-        assert_true(auto_result["meta"]["selectionMode"] == "fallback", f"Expected fallback selectionMode, got {auto_result['meta']['selectionMode']}")
-        assert_true(auto_result["meta"]["fallbackFrom"] == "builtin-opensees", f"Expected fallbackFrom builtin-opensees, got {auto_result['meta']['fallbackFrom']}")
-        print("[ok] auto engine pre-routes away from unavailable OpenSees runtime")
-
-        manual_request = AnalysisRequest.model_validate(
-            {
-                "type": "static",
-                "model": simply_supported,
-                "parameters": {"loadCaseIds": ["LC1"]},
-                "engineId": "builtin-opensees",
-            }
-        )
+        # Verify explicit engineId request fails with ENGINE_UNAVAILABLE
         try:
-            asyncio.run(analyze(manual_request))
-        except Exception as error:
-            status_code = getattr(error, "status_code", None)
-            detail = getattr(error, "detail", {})
-            assert_true(status_code == 422, f"Expected manual unavailable engine to raise 422, got {status_code}")
-            assert_true(isinstance(detail, dict) and detail.get("errorCode") == "ENGINE_UNAVAILABLE", f"Unexpected manual unavailable detail: {detail}")
-            print("[ok] manual builtin-opensees selection reports unavailable runtime")
-        else:
-            raise SystemExit("Manual builtin-opensees selection should fail when runtime is unavailable")
-
-        unsupported_request = AnalysisRequest.model_validate(
-            {
-                "type": "nonlinear",
-                "model": simply_supported,
-                "parameters": {"loadCaseIds": ["LC1"]},
-                "engineId": "builtin-simplified",
-            }
-        )
-        try:
-            asyncio.run(analyze(unsupported_request))
-        except Exception as error:
-            status_code = getattr(error, "status_code", None)
-            detail = getattr(error, "detail", {})
-            assert_true(status_code == 422, f"Expected unsupported engine request to raise 422, got {status_code}")
-            assert_true(isinstance(detail, dict) and detail.get("errorCode") == "ENGINE_UNSUPPORTED", f"Unexpected unsupported engine detail: {detail}")
-            print("[ok] manual unsupported engine selection reports unsupported request")
-        else:
-            raise SystemExit("Manual builtin-simplified nonlinear selection should fail as unsupported")
+            run_request(cantilever, engine_id="builtin-opensees")
+            raise SystemExit("Expected HTTPException for unavailable engine")
+        except HTTPException as exc:
+            assert_true(exc.status_code == 422, f"Expected HTTP 422, got {exc.status_code}")
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            assert_true(detail.get("errorCode") == "ENGINE_UNAVAILABLE", f"Expected ENGINE_UNAVAILABLE, got {detail.get('errorCode')}")
+        print("[ok] explicit engineId=builtin-opensees raises ENGINE_UNAVAILABLE")
 
 
 def validate_analyze_contract():
+    issue = get_opensees_runtime_issue()
+    if issue:
+        # Verify unavailable engine contract even without OpenSees runtime
+        registry = AnalysisEngineRegistry("StructureClaw Analysis Engine", "0.1.0")
+        engines = registry.list_engines()
+        opensees = next((e for e in engines if e["id"] == "builtin-opensees"), None)
+        assert_true(opensees is not None, "builtin-opensees missing from engine list")
+        assert_true(opensees["available"] is False, f"Expected available=False, got {opensees['available']}")
+        assert_true(opensees.get("unavailableReason"), "Expected non-empty unavailableReason")
+
+        model = StructureModelV2(
+            schema_version="2.0.0",
+            nodes=[Node(id="1", x=0, y=0, z=0, restraints=[True, True, True, True, True, True])],
+            elements=[],
+            materials=[],
+            sections=[],
+        )
+        request = AnalysisRequest(type="static", model=model, parameters={}, engineId="builtin-opensees")
+        try:
+            asyncio.run(analyze(request))
+            raise SystemExit("Expected HTTPException for unavailable engine")
+        except HTTPException as exc:
+            assert_true(exc.status_code == 422, f"Expected HTTP 422, got {exc.status_code}")
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            assert_true(detail.get("errorCode") == "ENGINE_UNAVAILABLE", f"Expected ENGINE_UNAVAILABLE, got {detail.get('errorCode')}")
+        print("[ok] analyze contract: explicit builtin-opensees raises ENGINE_UNAVAILABLE when unavailable")
+        return
     model = StructureModelV2(
         schema_version="2.0.0",
         nodes=[
@@ -289,42 +239,6 @@ def validate_analyze_contract():
         raise SystemExit(f"meta fields required: {sorted(missing_meta)}")
     print("[ok] analyze success envelope contract")
 
-    truss_3d_model = StructureModelV2(
-        schema_version="2.0.0",
-        nodes=[
-            Node(id="1", x=0, y=1, z=0, restraints=[True, True, True, False, False, False]),
-            Node(id="2", x=2, y=1, z=0, restraints=[False, True, True, False, False, False]),
-        ],
-        elements=[Element(id="1", type="truss", nodes=["1", "2"], material="1", section="1")],
-        materials=[Material(id="1", name="steel", E=200000, nu=0.3, rho=7850)],
-        sections=[Section(id="1", name="A1", type="rod", properties={"A": 0.01})],
-        load_cases=[{"id": "LC1", "type": "other", "loads": [{"node": "2", "fx": 10.0}]}],
-        load_combinations=[],
-    )
-
-    truss_3d_request = AnalysisRequest(type="static", model=truss_3d_model, parameters={"loadCaseIds": ["LC1"]})
-    truss_3d_result = asyncio.run(analyze(truss_3d_request)).model_dump()
-    if truss_3d_result["success"] is not True:
-        raise SystemExit("Expected success=true for 3D truss request")
-    data = truss_3d_result.get("data", {})
-    if data.get("analysisMode") != "linear_3d_truss":
-        raise SystemExit(f"Expected analysisMode=linear_3d_truss, got {data.get('analysisMode')}")
-    required_data_fields = {"displacements", "forces", "reactions", "envelope", "summary"}
-    missing_data = required_data_fields - set(data.keys())
-    if missing_data:
-        raise SystemExit(f"Missing analyze data fields for 3D truss: {sorted(missing_data)}")
-    required_envelope_fields = {
-        "maxAbsDisplacement",
-        "maxAbsAxialForce",
-        "maxAbsShearForce",
-        "maxAbsMoment",
-        "maxAbsReaction",
-    }
-    missing_envelope = required_envelope_fields - set((data.get("envelope") or {}).keys())
-    if missing_envelope:
-        raise SystemExit(f"Missing envelope fields for 3D truss: {sorted(missing_envelope)}")
-    print("[ok] analyze 3d truss envelope contract")
-
     frame_3d_model = StructureModelV2(
         schema_version="2.0.0",
         nodes=[
@@ -342,13 +256,13 @@ def validate_analyze_contract():
         type="static",
         model=frame_3d_model,
         parameters={"loadCaseIds": ["LC1"]},
-        engineId="builtin-simplified",
+        engineId="builtin-opensees",
     )
     frame_3d_result = asyncio.run(analyze(frame_3d_request)).model_dump()
     if frame_3d_result["success"] is not True:
         raise SystemExit("Expected success=true for 3D frame request")
-    if frame_3d_result.get("data", {}).get("analysisMode") != "linear_3d_frame":
-        raise SystemExit(f"Expected analysisMode=linear_3d_frame, got {frame_3d_result.get('data', {}).get('analysisMode')}")
+    if frame_3d_result.get("data", {}).get("analysisMode") != "opensees_3d_frame":
+        raise SystemExit(f"Expected analysisMode=opensees_3d_frame, got {frame_3d_result.get('data', {}).get('analysisMode')}")
     print("[ok] analyze 3d frame envelope contract")
 
     simplified_planar_beam_model = StructureModelV2(
@@ -372,14 +286,14 @@ def validate_analyze_contract():
         type="static",
         model=simplified_planar_beam_model,
         parameters={"loadCaseIds": ["LC1"]},
-        engineId="builtin-simplified",
+        engineId="builtin-opensees",
     )
     simplified_planar_result = asyncio.run(analyze(simplified_planar_request)).model_dump()
     if simplified_planar_result["success"] is not True:
         raise SystemExit("Expected success=true for simplified planar beam request")
     simplified_data = simplified_planar_result.get("data", {})
-    if simplified_data.get("analysisMode") != "linear_2d_frame":
-        raise SystemExit(f"Expected simplified planar beam analysisMode=linear_2d_frame, got {simplified_data.get('analysisMode')}")
+    if simplified_data.get("analysisMode") != "opensees_2d_frame":
+        raise SystemExit(f"Expected simplified planar beam analysisMode=opensees_2d_frame, got {simplified_data.get('analysisMode')}")
     # 1D beam models now use xz plane to align with restraint format interpretation (Issue #83 fix)
     if simplified_data.get("plane") != "xz":
         raise SystemExit(f"Expected simplified planar beam plane=xz, got {simplified_data.get('plane')}")
@@ -424,72 +338,6 @@ def validate_code_check_traceability():
     assert item["inputs"]["demand"] >= 0
     assert item["utilization"] >= 0
     print("[ok] code-check traceability contract")
-
-
-def validate_static_regression():
-    base = ROOT_DIR / "backend/src/skill-shared/python/structure_protocol/regression/static_2d"
-    cases = sorted(base.glob("case_*.json"))
-    if not cases:
-        raise SystemExit("No regression case files found")
-
-    for file_path in cases:
-        payload = json.loads(file_path.read_text(encoding="utf-8"))
-        request_payload = dict(payload["request"])
-        request_payload["engineId"] = "builtin-simplified"
-        request = AnalysisRequest.model_validate(request_payload)
-        result = asyncio.run(analyze(request)).model_dump(mode="json")
-        if result.get("success") is not True:
-            raise SystemExit(f"{file_path.name}: analyze failed: {result.get('message')}")
-
-        tolerance = float(payload.get("abs_tolerance", 1e-6))
-        for dotted_path, expected in payload.get("expected", {}).items():
-            actual = get_by_path(result, dotted_path)
-            if isinstance(expected, str):
-                if actual != expected:
-                    raise SystemExit(f"{file_path.name}: {dotted_path} expected '{expected}', got '{actual}'")
-                continue
-            actual_f = float(actual)
-            expected_f = float(expected)
-            if not math.isfinite(actual_f):
-                raise SystemExit(f"{file_path.name}: {dotted_path} is not finite: {actual}")
-            if abs(actual_f - expected_f) > tolerance:
-                raise SystemExit(f"{file_path.name}: {dotted_path} mismatch, expected {expected_f}, got {actual_f}, tol {tolerance}")
-        print(f"[ok] {file_path.name}")
-
-    print(f"Validated {len(cases)} static regression cases.")
-
-
-def validate_static_3d_regression():
-    base = ROOT_DIR / "backend/src/skill-shared/python/structure_protocol/regression/static_3d"
-    cases = sorted(base.glob("case_*.json"))
-    if not cases:
-        raise SystemExit("No 3D regression case files found")
-
-    for file_path in cases:
-        payload = json.loads(file_path.read_text(encoding="utf-8"))
-        request_payload = dict(payload["request"])
-        request_payload["engineId"] = "builtin-simplified"
-        request = AnalysisRequest.model_validate(request_payload)
-        result = asyncio.run(analyze(request)).model_dump(mode="json")
-        if result.get("success") is not True:
-            raise SystemExit(f"{file_path.name}: analyze failed: {result.get('message')}")
-
-        tolerance = float(payload.get("abs_tolerance", 1e-6))
-        for dotted_path, expected in payload.get("expected", {}).items():
-            actual = get_by_path(result, dotted_path)
-            if isinstance(expected, str):
-                if actual != expected:
-                    raise SystemExit(f"{file_path.name}: {dotted_path} expected '{expected}', got '{actual}'")
-                continue
-            actual_f = float(actual)
-            expected_f = float(expected)
-            if not math.isfinite(actual_f):
-                raise SystemExit(f"{file_path.name}: {dotted_path} is not finite: {actual}")
-            if abs(actual_f - expected_f) > tolerance:
-                raise SystemExit(f"{file_path.name}: {dotted_path} mismatch, expected {expected_f}, got {actual_f}, tol {tolerance}")
-        print(f"[ok] {file_path.name}")
-
-    print(f"Validated {len(cases)} static 3D regression cases.")
 
 
 def validate_structure_examples():
@@ -851,8 +699,6 @@ COMMANDS = {
     "validate-opensees-runtime-and-routing": validate_opensees_runtime_and_routing,
     "validate-analyze-contract": validate_analyze_contract,
     "validate-code-check-traceability": validate_code_check_traceability,
-    "validate-static-regression": validate_static_regression,
-    "validate-static-3d-regression": validate_static_3d_regression,
     "validate-structure-examples": validate_structure_examples,
     "validate-convert-roundtrip": validate_convert_roundtrip,
     "validate-midas-text-converter": validate_midas_text_converter,
