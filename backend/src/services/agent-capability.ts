@@ -1,7 +1,6 @@
 import { AnalysisEngineCatalogService } from './analysis-engine.js';
 import { AgentSkillCatalogService } from './agent-skill-catalog.js';
 import { AgentSkillRuntime } from '../agent-runtime/index.js';
-import { normalizeAnalysisTypes as normalizeDomainAnalysisTypes } from '../agent-skills/design/entry.js';
 import { normalizeMaterialFamilies as normalizeDomainMaterialFamilies } from '../agent-skills/material/entry.js';
 import { ALL_SKILL_DOMAINS } from '../agent-runtime/types.js';
 import { listAgentToolDefinitions } from '../agent-langgraph/tool-registry.js';
@@ -47,7 +46,6 @@ interface CapabilitySkill {
     minRuntimeVersion: string;
     skillApiVersion: string;
   };
-  autoLoadByDefault: boolean;
   stages: string[];
   name: {
     zh?: string;
@@ -59,7 +57,6 @@ interface DomainSummary {
   domain: SkillDomain;
   runtimeStatus: SkillRuntimeStatus;
   skillIds: string[];
-  autoLoadSkillIds: string[];
   capabilities: string[];
 }
 
@@ -157,13 +154,13 @@ function normalizeModelFamilies(value: unknown): string[] {
   return normalized.length > 0 ? normalized : ['generic'];
 }
 
-function normalizeAnalysisTypes(value: unknown): string[] {
+function normalizeAnalysisTypes(value: unknown): AgentAnalysisType[] {
   if (!Array.isArray(value)) {
     return [];
   }
+  const valid = new Set<AgentAnalysisType>(['static', 'dynamic', 'seismic', 'nonlinear']);
   return value
-    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-    .map((item) => item.trim().toLowerCase());
+    .filter((item): item is AgentAnalysisType => typeof item === 'string' && valid.has(item as AgentAnalysisType));
 }
 
 function resolveSkillModelFamilies(structureType: string | undefined): string[] {
@@ -196,10 +193,9 @@ function buildCatalogEntryFromManifest(
     },
     stages: Array.isArray(manifest.stages) ? [...manifest.stages] : [],
     triggers: Array.isArray(manifest.triggers) ? [...manifest.triggers] : [],
-    autoLoadByDefault: Boolean(manifest.autoLoadByDefault),
     structureType: manifest.structureType,
     capabilities: Array.isArray(manifest.capabilities) ? [...manifest.capabilities] : [],
-    supportedAnalysisTypes: normalizeDomainAnalysisTypes(manifest.supportedAnalysisTypes),
+    supportedAnalysisTypes: normalizeAnalysisTypes(manifest.supportedAnalysisTypes),
     supportedModelFamilies: Array.isArray(manifest.supportedModelFamilies)
       ? uniqueStrings(manifest.supportedModelFamilies)
       : [],
@@ -352,7 +348,7 @@ export class AgentCapabilityService {
         requires: Array.isArray(manifest?.requires) ? [...manifest.requires] : [],
         conflicts: Array.isArray(manifest?.conflicts) ? [...manifest.conflicts] : [],
         capabilities: uniqueStrings(entry.capabilities),
-        supportedAnalysisTypes: normalizeDomainAnalysisTypes(entry.supportedAnalysisTypes as AgentAnalysisType[]),
+        supportedAnalysisTypes: normalizeAnalysisTypes(entry.supportedAnalysisTypes as AgentAnalysisType[]),
         supportedModelFamilies: entry.supportedModelFamilies.length > 0
           ? uniqueStrings(entry.supportedModelFamilies)
           : resolveSkillModelFamilies(entry.structureType),
@@ -362,7 +358,6 @@ export class AgentCapabilityService {
           minRuntimeVersion: entry.compatibility.minRuntimeVersion,
           skillApiVersion: entry.compatibility.skillApiVersion,
         },
-        autoLoadByDefault: entry.autoLoadByDefault,
         stages: uniqueStrings(entry.stages),
         name: {
           zh: entry.name?.zh,
@@ -446,7 +441,6 @@ export class AgentCapabilityService {
         domain,
         runtimeStatus: resolveDomainRuntimeStatus(domain, discoverableDomains.has(domain)),
         skillIds: [],
-        autoLoadSkillIds: [],
         capabilities: [],
       }]),
     );
@@ -456,9 +450,6 @@ export class AgentCapabilityService {
         continue;
       }
       existing.skillIds.push(skill.id);
-      if (skill.autoLoadByDefault) {
-        existing.autoLoadSkillIds.push(skill.id);
-      }
       existing.capabilities = Array.from(new Set([...existing.capabilities, ...skill.capabilities]));
     }
 
@@ -466,7 +457,6 @@ export class AgentCapabilityService {
       .map((summary) => ({
         ...summary,
         skillIds: [...summary.skillIds].sort(),
-        autoLoadSkillIds: [...summary.autoLoadSkillIds].sort(),
         capabilities: [...summary.capabilities].sort(),
       }))
       .sort((a, b) => a.domain.localeCompare(b.domain));

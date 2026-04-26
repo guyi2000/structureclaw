@@ -98,7 +98,6 @@ export const skillManifestFileSchema = z.object({
   capabilities: z.array(z.string().trim().min(1)).default([]),
   requires: z.array(z.string().trim().min(1)).default([]),
   conflicts: z.array(z.string().trim().min(1)).default([]),
-  autoLoadByDefault: z.boolean().default(false),
   priority: z.number().int().default(0),
   compatibility: z.object({
     minRuntimeVersion: z.string().trim().min(1),
@@ -125,7 +124,7 @@ export const skillManifestFileSchema = z.object({
   toolHints: z.record(z.unknown()).default({}),
   aliases: z.array(z.string().trim().min(1)).default([]),
   runtimeContract: runtimeContractSchema,
-}).strict();
+}).passthrough();
 
 export type SkillManifestFile = z.infer<typeof skillManifestFileSchema>;
 
