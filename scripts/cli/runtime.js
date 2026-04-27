@@ -7,8 +7,8 @@ const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 
 const DEFAULT_ANALYSIS_PYTHON_VERSION = "3.12";
-const DEFAULT_FRONTEND_PORT = "30000";
-const DEFAULT_BACKEND_PORT = "8000";
+const DEFAULT_FRONTEND_PORT = "31416";
+const DEFAULT_BACKEND_PORT = "31415";
 const CN_DEFAULT_PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple";
 const CN_DEFAULT_NPM_REGISTRY = "https://registry.npmmirror.com";
 const CN_DEFAULT_DOCKER_REGISTRY_MIRROR = "docker.m.daocloud.io/";
@@ -40,10 +40,17 @@ function ensureFileFromExample(targetPath, examplePath, logger = () => {}) {
 }
 
 function hasCommand(commandName) {
+  // If we're already running inside Node, `node` is guaranteed available
+  if (commandName === "node") {
+    return true;
+  }
+
   const lookup = isWindows() ? "where" : "which";
   const result = spawnSync(lookup, [commandName], {
     stdio: "ignore",
-    shell: false,
+    // Use shell on Windows so `where.exe` inherits the full user PATH,
+    // including paths added by nvm, fnm, or interactive shell profiles.
+    shell: isWindows(),
   });
   return result.status === 0;
 }
@@ -158,6 +165,32 @@ function getConfigValue(dotEnv, name, defaultValue) {
   return defaultValue;
 }
 
+/**
+ * Detect whether the project root is an installed npm package (vs source checkout).
+ * Installed packages ship dist/backend/ and dist/frontend/ but no backend/package.json.
+ */
+function isInstalledPackageLayout(resolvedRoot) {
+  return (
+    pathExists(path.join(resolvedRoot, "dist", "backend", "index.js")) &&
+    pathExists(path.join(resolvedRoot, "dist", "frontend")) &&
+    pathExists(path.join(resolvedRoot, "backend", "prisma", "schema.prisma"))
+  );
+}
+
+/**
+ * Return the user-facing runtime data directory.
+ * Installed packages use ~/.structureclaw/; source checkouts use .runtime/.
+ */
+function resolveRuntimeDataDir(rootDir) {
+  if (process.env.SCLAW_DATA_DIR) {
+    return process.env.SCLAW_DATA_DIR;
+  }
+  if (isInstalledPackageLayout(rootDir)) {
+    return path.join(os.homedir(), ".structureclaw");
+  }
+  return path.join(rootDir, ".runtime");
+}
+
 function resolveProjectRoot(explicitRoot) {
   const candidates = [
     explicitRoot,
@@ -168,6 +201,13 @@ function resolveProjectRoot(explicitRoot) {
 
   for (const candidate of candidates) {
     const resolved = path.resolve(candidate);
+
+    // Installed npm package layout: pre-built dist/ + prisma schema
+    if (isInstalledPackageLayout(resolved)) {
+      return resolved;
+    }
+
+    // Dev monorepo layout (original): source checkout with backend/frontend dirs
     if (
       pathExists(path.join(resolved, "backend", "package.json")) &&
       pathExists(path.join(resolved, "frontend", "package.json")) &&
@@ -183,17 +223,25 @@ function resolveProjectRoot(explicitRoot) {
 }
 
 function resolvePaths(rootDir) {
-  const runtimeDir = path.join(rootDir, ".runtime");
+  const installedMode = isInstalledPackageLayout(rootDir);
+  const runtimeDir = installedMode ? resolveRuntimeDataDir(rootDir) : path.join(rootDir, ".runtime");
+
   return {
     rootDir,
     runtimeDir,
     logDir: path.join(runtimeDir, "logs"),
     pidDir: path.join(runtimeDir, "pids"),
     dataDir: path.join(runtimeDir, "data"),
-    envFile: path.join(rootDir, ".env"),
+    envFile: installedMode
+      ? path.join(runtimeDir, ".env")
+      : path.join(rootDir, ".env"),
     envExampleFile: path.join(rootDir, ".env.example"),
-    backendDir: path.join(rootDir, "backend"),
-    frontendDir: path.join(rootDir, "frontend"),
+    backendDir: installedMode
+      ? path.join(rootDir, "dist", "backend")
+      : path.join(rootDir, "backend"),
+    frontendDir: installedMode
+      ? path.join(rootDir, "dist", "frontend")
+      : path.join(rootDir, "frontend"),
     dockerComposeFile: path.join(rootDir, "docker-compose.yml"),
     dockerComposeCnFile: path.join(rootDir, "docker-compose.cn.yml"),
     analysisRequirementsFile: path.join(
@@ -225,6 +273,7 @@ function resolvePaths(rootDir) {
     dataInputSkillRoot: path.join(rootDir, "backend", "src", "agent-skills", "data-input"),
     codeCheckSkillRoot: path.join(rootDir, "backend", "src", "agent-skills", "code-check"),
     materialSkillRoot: path.join(rootDir, "backend", "src", "agent-skills", "material"),
+    installedMode,
   };
 }
 
@@ -296,13 +345,23 @@ function applyCnProfileDefaults(env, dotEnv) {
   }
 }
 
+function readSettingsJson(paths) {
+  const settingsPath = path.join(path.dirname(paths.envFile), "settings.json");
+  try {
+    if (pathExists(settingsPath)) {
+      return JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    }
+  } catch { /* return empty */ }
+  return {};
+}
+
 function loadProjectEnvironment(rootDir, logger = () => {}, options = {}) {
   const paths = resolvePaths(rootDir);
   ensureDirectory(paths.runtimeDir);
   ensureDirectory(paths.logDir);
   ensureDirectory(paths.pidDir);
-  ensureFileFromExample(paths.envFile, paths.envExampleFile, logger);
   const dotEnv = readDotEnv(paths.envFile);
+  const settings = readSettingsJson(paths);
   const profile =
     String(options.profile || process.env.SCLAW_PROFILE || dotEnv.SCLAW_PROFILE || "default").toLowerCase();
   const programName = String(options.programName || process.env.SCLAW_PROGRAM_NAME || "sclaw");
@@ -312,6 +371,11 @@ function loadProjectEnvironment(rootDir, logger = () => {}, options = {}) {
     SCLAW_PROFILE: profile,
     SCLAW_PROGRAM_NAME: programName,
   };
+  // Apply settings.json values (take priority over .env for core settings)
+  if (settings.server?.port) env.PORT = String(settings.server.port);
+  if (settings.server?.frontendPort) env.FRONTEND_PORT = String(settings.server.frontendPort);
+  if (settings.server?.host) env.HOST = settings.server.host;
+  if (settings.database?.url) env.DATABASE_URL = settings.database.url;
   applyCnProfileDefaults(env, dotEnv);
   env.DOCKER_REGISTRY_MIRROR = normalizeDockerRegistryMirror(env.DOCKER_REGISTRY_MIRROR);
   env.APT_MIRROR = normalizeAptMirror(env.APT_MIRROR);
@@ -797,6 +861,18 @@ function resolveAnalysisPython(rootDir, env) {
   if (env.ANALYSIS_PYTHON_BIN && pathExists(env.ANALYSIS_PYTHON_BIN)) {
     return env.ANALYSIS_PYTHON_BIN;
   }
+
+  // Installed-package mode: venv lives in the user's runtime data dir
+  if (isInstalledPackageLayout(rootDir)) {
+    const dataDir = resolveRuntimeDataDir(rootDir);
+    const winVenv = path.join(dataDir, ".venv", "Scripts", "python.exe");
+    if (pathExists(winVenv)) return winVenv;
+    const unixVenv = path.join(dataDir, ".venv", "bin", "python");
+    if (pathExists(unixVenv)) return unixVenv;
+    return null;
+  }
+
+  // Source checkout: venv lives at backend/.venv
   const windowsVenv = path.join(rootDir, "backend", ".venv", "Scripts", "python.exe");
   if (pathExists(windowsVenv)) {
     return windowsVenv;
@@ -873,11 +949,13 @@ module.exports = {
   pidFilePath,
   pythonModuleExists,
   quoteShellArgument,
+  readDotEnv,
   readTrackedPid,
   removeTrackedPid,
   requestUrl,
   requireCommand,
   resolveAnalysisPython,
+  readSettingsJson,
   resolvePaths,
   resolveProjectRoot,
   runCommand,

@@ -5,6 +5,8 @@ import { agentRoutes } from './agent.js';
 import { analysisEngineRoutes } from './analysis-engine.js';
 import { adminDatabaseRoutes } from './admin-database.js';
 import { adminLlmRoutes } from './admin-llm.js';
+import { adminSettingsRoutes } from './admin-settings.js';
+import { adminSkillsRoutes } from './admin-skills.js';
 import { analysisRuntimeRoutes } from './analysis-runtime.js';
 import { fileRoutes } from './files.js';
 
@@ -21,6 +23,8 @@ export async function registerRoutes(fastify: FastifyInstance) {
   await fastify.register(agentRoutes, { prefix: `${apiPrefix}/agent` });
   await fastify.register(adminDatabaseRoutes, { prefix: `${apiPrefix}/admin/database` });
   await fastify.register(adminLlmRoutes, { prefix: `${apiPrefix}/admin/llm` });
+  await fastify.register(adminSettingsRoutes, { prefix: `${apiPrefix}/admin/settings` });
+  await fastify.register(adminSkillsRoutes, { prefix: `${apiPrefix}/admin/skills` });
   await fastify.register(fileRoutes, { prefix: `${apiPrefix}/files` });
 
   // API 信息

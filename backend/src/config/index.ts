@@ -1,15 +1,33 @@
-import dotenv from 'dotenv';
+import os from 'os';
 import path from 'path';
 import process from 'process';
+import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
+import { readSettingsFile, migrateLegacyLlmSettings } from './settings-file.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const rootEnvPath = path.resolve(__dirname, '../../../.env');
-const defaultSqliteDatabasePath = path.resolve(__dirname, '../../../.runtime/data/structureclaw.db');
+
+// Detect installed-package mode: dist/backend/config/index.js -> dist/frontend exists
+const isInstalledPackage = existsSync(path.resolve(__dirname, '../../frontend'));
+
+function getUserDataDir(): string {
+  return path.join(os.homedir(), '.structureclaw');
+}
+
+const runtimeBaseDir = process.env.SCLAW_DATA_DIR
+  || (isInstalledPackage ? getUserDataDir() : path.resolve(__dirname, '../../../.runtime'));
+
+// Migrate legacy llm-settings.json → settings.json if needed
+migrateLegacyLlmSettings();
+
+// Load unified settings file (single source of user-facing truth)
+const fileSettings = readSettingsFile();
+
+const defaultSqliteDatabasePath = path.join(runtimeBaseDir, 'data', 'structureclaw.db');
 const defaultSqliteDatabaseUrl = `file:${defaultSqliteDatabasePath}`;
-const defaultUploadDir = path.resolve(__dirname, '../../../.runtime');
-const defaultLlmSettingsPath = path.resolve(__dirname, '../../../.runtime/llm-settings.json');
+const defaultUploadDir = runtimeBaseDir;
+const defaultLlmSettingsPath = path.join(runtimeBaseDir, 'llm-settings.json');
 
 function resolveReportsDir(rawValue: string | undefined): string {
   const trimmed = rawValue?.trim();
@@ -24,17 +42,20 @@ function resolveReportsDir(rawValue: string | undefined): string {
   return path.resolve(__dirname, '../../../', trimmed);
 }
 
-dotenv.config({ path: rootEnvPath });
-
-const llmApiKey = process.env.LLM_API_KEY || '';
-const llmModel = process.env.LLM_MODEL || 'gpt-4-turbo-preview';
-const llmBaseUrl = process.env.LLM_BASE_URL || 'https://api.openai.com/v1';
-const frontendPort = process.env.FRONTEND_PORT || '30000';
-const backendPort = process.env.PORT || '8000';
-const analysisEngineManifestPath = process.env.ANALYSIS_ENGINE_MANIFEST_PATH || path.resolve(__dirname, '../../../.runtime/analysis-engines.json');
-const defaultAnalysisPythonBin = process.platform === 'win32'
-  ? path.resolve(__dirname, '../../.venv/Scripts/python.exe')
-  : path.resolve(__dirname, '../../.venv/bin/python');
+const llmApiKey = fileSettings?.llm?.apiKey ?? '';
+const llmModel = fileSettings?.llm?.model ?? 'gpt-4-turbo-preview';
+const llmBaseUrl = fileSettings?.llm?.baseUrl ?? 'https://api.openai.com/v1';
+const frontendPort = fileSettings?.server?.frontendPort?.toString() ?? (process.env.FRONTEND_PORT || '31416');
+const backendPort = fileSettings?.server?.port ?? (parseInt(process.env.PORT || '', 10) || 31415);
+const analysisEngineManifestPath = fileSettings?.analysis?.engineManifestPath
+  ?? path.join(runtimeBaseDir, 'analysis-engines.json');
+const defaultAnalysisPythonBin = isInstalledPackage
+  ? (process.platform === 'win32'
+    ? path.join(runtimeBaseDir, '.venv', 'Scripts', 'python.exe')
+    : path.join(runtimeBaseDir, '.venv', 'bin', 'python'))
+  : (process.platform === 'win32'
+    ? path.resolve(__dirname, '../../.venv/Scripts/python.exe')
+    : path.resolve(__dirname, '../../.venv/bin/python'));
 
 const defaultCorsOrigins = [
   `http://localhost:${frontendPort}`,
@@ -43,54 +64,79 @@ const defaultCorsOrigins = [
   `http://127.0.0.1:${backendPort}`,
 ];
 
-const corsOrigins = (process.env.CORS_ORIGINS || defaultCorsOrigins.join(','))
+const corsOrigins = (fileSettings?.cors?.origins ?? defaultCorsOrigins.join(','))
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);
 
+export { runtimeBaseDir };
+
 export const config = {
   // 服务配置
-  port: parseInt(process.env.PORT || '8000', 10),
-  host: process.env.HOST || '0.0.0.0',
+  port: typeof backendPort === 'number' ? backendPort : parseInt(String(backendPort), 10),
+  host: fileSettings?.server?.host ?? '0.0.0.0',
   nodeEnv: process.env.NODE_ENV || 'development',
-  bodyLimitMb: parseInt(process.env.BACKEND_BODY_LIMIT_MB || '20', 10),
+  bodyLimitMb: fileSettings?.server?.bodyLimitMb ?? 20,
+  frontendPort: parseInt(frontendPort, 10),
 
   // 数据库配置
-  databaseUrl: process.env.DATABASE_URL || defaultSqliteDatabaseUrl,
+  databaseUrl: fileSettings?.database?.url ?? defaultSqliteDatabaseUrl,
 
   // AI 配置
   llmApiKey,
   llmModel,
   llmBaseUrl,
-  llmTimeoutMs: parseInt(process.env.LLM_TIMEOUT_MS || '180000', 10),
-  llmMaxRetries: parseInt(process.env.LLM_MAX_RETRIES || '0', 10),
+  llmTimeoutMs: fileSettings?.llm?.timeoutMs ?? 180000,
+  llmMaxRetries: fileSettings?.llm?.maxRetries ?? 0,
 
   // 分析执行配置
-  analysisPythonBin: process.env.ANALYSIS_PYTHON_BIN || defaultAnalysisPythonBin,
-  analysisPythonTimeoutMs: parseInt(process.env.ANALYSIS_PYTHON_TIMEOUT_MS || '600000', 10),
+  analysisPythonBin: fileSettings?.analysis?.pythonBin ?? defaultAnalysisPythonBin,
+  analysisPythonTimeoutMs: fileSettings?.analysis?.pythonTimeoutMs ?? 600000,
   analysisEngineManifestPath,
 
   // CORS
   corsOrigins,
 
   // 文件存储
-  /** Agent 报告落盘目录；默认 <repo>/.runtime/reports */
-  reportsDir: resolveReportsDir(process.env.REPORTS_DIR),
-  maxFileSize: parseInt(process.env.MAX_FILE_SIZE || '104857600', 10), // 100MB
+  reportsDir: resolveReportsDir(fileSettings?.storage?.reportsDir),
+  maxFileSize: fileSettings?.storage?.maxFileSize ?? 104857600,
 
   // 日志级别
-  logLevel: process.env.LOG_LEVEL || 'info',
-  /** 应用日志文件路径；默认 <repo>/.runtime/logs/app.log */
-  logFile: process.env.LOG_FILE || '',
+  logLevel: fileSettings?.logging?.level ?? 'info',
+  /** 应用日志文件路径；默认 <runtimeBaseDir>/logs/app.log */
+  logFile: path.join(runtimeBaseDir, 'logs', 'app.log'),
   /** 日志轮换：保留天数（默认 7 天） */
-  logMaxAgeDays: Math.max(1, parseInt(process.env.LOG_MAX_AGE_DAYS || '7', 10)) || 7,
+  logMaxAgeDays: fileSettings?.logging?.logMaxAgeDays ?? 7,
   /** 日志轮换：单文件最大字节数（默认 100MB） */
-  logMaxSize: Math.max(1, parseInt(process.env.LOG_MAX_SIZE || '104857600', 10)) || 104857600,
+  logMaxSize: fileSettings?.logging?.logMaxSize ?? 104857600,
 
-  // LLM 调用日志（默认关闭，设置 LLM_LOG_ENABLED=true 开启；日志含完整 prompt/response，注意隐私）
-  llmLogEnabled: process.env.LLM_LOG_ENABLED === 'true',
-  llmLogDir: process.env.LLM_LOG_DIR || '',
-  llmSettingsPath: process.env.LLM_SETTINGS_PATH || defaultLlmSettingsPath,
+  // LLM 调用日志（默认关闭，设置 llmLogEnabled: true 开启）
+  llmLogEnabled: fileSettings?.logging?.llmLogEnabled ?? false,
+  llmLogDir: fileSettings?.logging?.llmLogDir ?? path.join(runtimeBaseDir, 'logs'),
+  llmSettingsPath: defaultLlmSettingsPath,
+
+  // Agent 配置
+  agentWorkspaceRoot: fileSettings?.agent?.workspaceRoot ?? '',
+  agentCheckpointDir: fileSettings?.agent?.checkpointDir ?? path.join(runtimeBaseDir, 'agent-checkpoints'),
+  agentAllowShell: fileSettings?.agent?.allowShell ?? false,
+  agentAllowedShells: fileSettings?.agent?.allowedShellCommands ?? 'node,npm,python,python3,./sclaw,./sclaw_cn',
+  agentShellTimeoutMs: fileSettings?.agent?.shellTimeoutMs ?? 300000,
+
+  // PKPM 引擎配置
+  pkpmCyclePath: fileSettings?.pkpm?.cyclePath ?? '',
+  pkpmWorkDir: fileSettings?.pkpm?.workDir ?? path.join(runtimeBaseDir, 'analysis', 'pkpm'),
+
+  // YJK 引擎配置
+  yjkInstallRoot: fileSettings?.yjk?.installRoot ?? '',
+  yjkExePath: fileSettings?.yjk?.exePath ?? '',
+  yjkPythonBin: fileSettings?.yjk?.pythonBin ?? '',
+  yjkWorkDir: fileSettings?.yjk?.workDir ?? path.join(runtimeBaseDir, 'analysis', 'yjk'),
+  yjkVersion: fileSettings?.yjk?.version ?? '8.0.0',
+  yjkTimeoutS: fileSettings?.yjk?.timeoutS ?? 600,
+  yjkInvisible: fileSettings?.yjk?.invisible ?? false,
 };
 
 export type Config = typeof config;
+
+// Expose DATABASE_URL for Prisma CLI / tooling that reads process.env directly
+process.env.DATABASE_URL = config.databaseUrl;

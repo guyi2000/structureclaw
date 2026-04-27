@@ -3,219 +3,187 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, test } from '@jest/globals';
 
-const llmSettingsModuleUrl = new URL('../dist/config/llm-runtime.js', import.meta.url).href;
+// Import compiled modules — these are singletons in module cache.
+// Tests use SCLAW_DATA_DIR to control where settings.json is read/written.
+// Each test sets SCLAW_DATA_DIR BEFORE the first import, then invalidates caches.
+const llmRuntimeUrl = new URL('../dist/config/llm-runtime.js', import.meta.url).href;
+const settingsFileUrl = new URL('../dist/config/settings-file.js', import.meta.url).href;
+const configUrl = new URL('../dist/config/index.js', import.meta.url).href;
 
-async function importLlmRuntimeFresh() {
-  return import(`${llmSettingsModuleUrl}?ts=${Date.now()}-${Math.random()}`);
+async function getModules() {
+  // Use cache-busting query to force fresh module evaluation
+  // Must bust all three modules since config/index.js is the root that reads settings
+  const cacheBust = `?_=${Date.now()}-${Math.random()}`;
+  const config = await import(`${configUrl}${cacheBust}`);
+  const settingsFile = await import(`${settingsFileUrl}${cacheBust}`);
+  const llmRuntime = await import(`${llmRuntimeUrl}${cacheBust}`);
+  return { llmRuntime, settingsFile, config };
 }
 
 describe('backend runtime llm settings', () => {
-  test('uses runtime settings ahead of env defaults and reports runtime sources in public output', async () => {
+  test('uses runtime settings from settings.json and reports runtime sources', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'structureclaw-llm-settings-'));
-    const settingsPath = path.join(tempDir, 'llm-settings.json');
     const previous = {
-      LLM_API_KEY: process.env.LLM_API_KEY,
-      LLM_MODEL: process.env.LLM_MODEL,
-      LLM_BASE_URL: process.env.LLM_BASE_URL,
-      LLM_SETTINGS_PATH: process.env.LLM_SETTINGS_PATH,
+      SCLAW_DATA_DIR: process.env.SCLAW_DATA_DIR,
     };
 
-    process.env.LLM_API_KEY = 'env-secret';
-    process.env.LLM_MODEL = 'env-model';
-    process.env.LLM_BASE_URL = 'https://env.example.com/v1';
-    process.env.LLM_SETTINGS_PATH = settingsPath;
+    process.env.SCLAW_DATA_DIR = tempDir;
 
+    const settingsPath = path.join(tempDir, 'settings.json');
     fs.writeFileSync(settingsPath, JSON.stringify({
-      apiKey: 'runtime-secret',
-      model: 'runtime-model',
-      baseUrl: 'https://runtime.example.com/v1',
+      llm: { apiKey: 'runtime-secret', model: 'runtime-model', baseUrl: 'https://runtime.example.com/v1' },
     }));
 
     try {
-      const {
-        getEffectiveLlmSettings,
-        getPublicLlmSettings,
-      } = await importLlmRuntimeFresh();
-
-      expect(getEffectiveLlmSettings()).toMatchObject({
+      const { llmRuntime } = await getModules();
+      expect(llmRuntime.getEffectiveLlmSettings()).toMatchObject({
         llmApiKey: 'runtime-secret',
         llmModel: 'runtime-model',
         llmBaseUrl: 'https://runtime.example.com/v1',
       });
-      expect(getPublicLlmSettings()).toMatchObject({
-        hasApiKey: true,
-        apiKeyMasked: '********',
-        model: 'runtime-model',
-        baseUrl: 'https://runtime.example.com/v1',
-        hasOverrides: true,
-        baseUrlSource: 'runtime',
-        modelSource: 'runtime',
-        apiKeySource: 'runtime',
+      expect(llmRuntime.getPublicLlmSettings()).toMatchObject({
+        hasApiKey: true, apiKeyMasked: '********',
+        model: 'runtime-model', baseUrl: 'https://runtime.example.com/v1',
+        hasOverrides: true, baseUrlSource: 'runtime', modelSource: 'runtime', apiKeySource: 'runtime',
       });
     } finally {
       for (const [key, value] of Object.entries(previous)) {
-        if (value === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = value;
-        }
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
       }
     }
   });
 
   test('keeps the previous runtime api key when apiKeyMode is keep', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'structureclaw-llm-settings-'));
-    const settingsPath = path.join(tempDir, 'llm-settings.json');
     const previous = {
-      LLM_API_KEY: process.env.LLM_API_KEY,
-      LLM_MODEL: process.env.LLM_MODEL,
-      LLM_BASE_URL: process.env.LLM_BASE_URL,
-      LLM_SETTINGS_PATH: process.env.LLM_SETTINGS_PATH,
+      SCLAW_DATA_DIR: process.env.SCLAW_DATA_DIR,
     };
 
-    process.env.LLM_API_KEY = '';
-    process.env.LLM_MODEL = 'env-model';
-    process.env.LLM_BASE_URL = 'https://env.example.com/v1';
-    process.env.LLM_SETTINGS_PATH = settingsPath;
+    process.env.SCLAW_DATA_DIR = tempDir;
 
+    const settingsPath = path.join(tempDir, 'settings.json');
     fs.writeFileSync(settingsPath, JSON.stringify({
-      apiKey: 'runtime-secret',
-      model: 'runtime-model',
-      baseUrl: 'https://runtime.example.com/v1',
+      llm: { apiKey: 'runtime-secret', model: 'runtime-model', baseUrl: 'https://runtime.example.com/v1' },
     }));
 
     try {
-      const {
-        updateRuntimeLlmSettings,
-      } = await importLlmRuntimeFresh();
-
-      updateRuntimeLlmSettings({
+      const { llmRuntime } = await getModules();
+      llmRuntime.updateRuntimeLlmSettings({
         baseUrl: 'https://updated.example.com/v1',
         model: 'updated-model',
         apiKeyMode: 'keep',
       });
 
-      expect(JSON.parse(fs.readFileSync(settingsPath, 'utf8'))).toMatchObject({
-        apiKey: 'runtime-secret',
-        model: 'updated-model',
-        baseUrl: 'https://updated.example.com/v1',
+      const stored = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      expect(stored.llm).toMatchObject({
+        apiKey: 'runtime-secret', model: 'updated-model', baseUrl: 'https://updated.example.com/v1',
       });
     } finally {
       for (const [key, value] of Object.entries(previous)) {
-        if (value === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = value;
-        }
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
       }
     }
   });
 
-  test('falls back to the env api key when runtime token override is removed', async () => {
+  test('removes runtime api key when apiKeyMode is inherit and reports unset', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'structureclaw-llm-settings-'));
-    const settingsPath = path.join(tempDir, 'llm-settings.json');
     const previous = {
-      LLM_API_KEY: process.env.LLM_API_KEY,
-      LLM_MODEL: process.env.LLM_MODEL,
-      LLM_BASE_URL: process.env.LLM_BASE_URL,
-      LLM_SETTINGS_PATH: process.env.LLM_SETTINGS_PATH,
+      SCLAW_DATA_DIR: process.env.SCLAW_DATA_DIR,
     };
 
-    process.env.LLM_API_KEY = 'env-secret';
-    process.env.LLM_MODEL = 'env-model';
-    process.env.LLM_BASE_URL = 'https://env.example.com/v1';
-    process.env.LLM_SETTINGS_PATH = settingsPath;
+    process.env.SCLAW_DATA_DIR = tempDir;
 
+    const settingsPath = path.join(tempDir, 'settings.json');
     fs.writeFileSync(settingsPath, JSON.stringify({
-      apiKey: 'runtime-secret',
-      model: 'runtime-model',
-      baseUrl: 'https://runtime.example.com/v1',
+      llm: { apiKey: 'runtime-secret', model: 'runtime-model', baseUrl: 'https://runtime.example.com/v1' },
     }));
 
     try {
-      const {
-        getEffectiveLlmSettings,
-        getPublicLlmSettings,
-        updateRuntimeLlmSettings,
-      } = await importLlmRuntimeFresh();
-
-      updateRuntimeLlmSettings({
-        baseUrl: 'https://runtime.example.com/v1',
-        model: 'runtime-model',
-        apiKeyMode: 'inherit',
+      const { llmRuntime } = await getModules();
+      llmRuntime.updateRuntimeLlmSettings({
+        baseUrl: 'https://runtime.example.com/v1', model: 'runtime-model', apiKeyMode: 'inherit',
       });
 
-      const storedSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-      expect(storedSettings).toMatchObject({
-        model: 'runtime-model',
-        baseUrl: 'https://runtime.example.com/v1',
+      const stored = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      expect(stored.llm).toMatchObject({ model: 'runtime-model', baseUrl: 'https://runtime.example.com/v1' });
+      expect(stored.llm).not.toHaveProperty('apiKey');
+      // After removing the API key, it's unset (no env fallback)
+      expect(llmRuntime.getEffectiveLlmSettings()).toMatchObject({
+        llmApiKey: '', llmModel: 'runtime-model', llmBaseUrl: 'https://runtime.example.com/v1',
       });
-      expect(storedSettings).not.toHaveProperty('apiKey');
-      expect(getEffectiveLlmSettings()).toMatchObject({
-        llmApiKey: 'env-secret',
-        llmModel: 'runtime-model',
-        llmBaseUrl: 'https://runtime.example.com/v1',
-      });
-      expect(getPublicLlmSettings()).toMatchObject({
-        hasApiKey: true,
-        apiKeyMasked: '********',
-        apiKeySource: 'env',
+      expect(llmRuntime.getPublicLlmSettings()).toMatchObject({
+        hasApiKey: false, apiKeySource: 'unset',
       });
     } finally {
       for (const [key, value] of Object.entries(previous)) {
-        if (value === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = value;
-        }
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
       }
     }
   });
 
-  test('deletes the runtime settings file when all overrides are removed', async () => {
+  test('returns default values when all overrides are removed', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'structureclaw-llm-settings-'));
-    const settingsPath = path.join(tempDir, 'llm-settings.json');
+    const previous = {
+      SCLAW_DATA_DIR: process.env.SCLAW_DATA_DIR,
+    };
+
+    process.env.SCLAW_DATA_DIR = tempDir;
+
+    const settingsPath = path.join(tempDir, 'settings.json');
+    fs.writeFileSync(settingsPath, JSON.stringify({
+      llm: { apiKey: 'runtime-secret', model: 'runtime-model', baseUrl: 'https://runtime.example.com/v1' },
+    }));
+
+    try {
+      const { llmRuntime } = await getModules();
+      llmRuntime.clearRuntimeLlmSettings();
+      // After clearing, the settings file may be deleted or have empty llm section
+      expect(llmRuntime.getPublicLlmSettings()).toMatchObject({
+        baseUrl: 'https://api.openai.com/v1', model: 'gpt-4-turbo-preview',
+        hasApiKey: false, apiKeySource: 'unset', hasOverrides: false,
+      });
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    }
+  });
+
+  test('env vars do NOT affect config — settings.json is the only source', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'structureclaw-llm-settings-'));
     const previous = {
       LLM_API_KEY: process.env.LLM_API_KEY,
       LLM_MODEL: process.env.LLM_MODEL,
       LLM_BASE_URL: process.env.LLM_BASE_URL,
-      LLM_SETTINGS_PATH: process.env.LLM_SETTINGS_PATH,
+      SCLAW_DATA_DIR: process.env.SCLAW_DATA_DIR,
     };
 
-    process.env.LLM_API_KEY = 'env-secret';
-    process.env.LLM_MODEL = 'env-model';
-    process.env.LLM_BASE_URL = 'https://env.example.com/v1';
-    process.env.LLM_SETTINGS_PATH = settingsPath;
+    // Set env vars that should be IGNORED
+    process.env.LLM_API_KEY = 'env-secret-ignored';
+    process.env.LLM_MODEL = 'env-model-ignored';
+    process.env.LLM_BASE_URL = 'https://env-ignored.example.com/v1';
+    process.env.SCLAW_DATA_DIR = tempDir;
 
-    fs.writeFileSync(settingsPath, JSON.stringify({
-      apiKey: 'runtime-secret',
-      model: 'runtime-model',
-      baseUrl: 'https://runtime.example.com/v1',
-    }));
-
+    // No settings.json — should use hardcoded defaults, NOT env vars
     try {
-      const {
-        clearRuntimeLlmSettings,
-        getPublicLlmSettings,
-      } = await importLlmRuntimeFresh();
-
-      clearRuntimeLlmSettings();
-
-      expect(fs.existsSync(settingsPath)).toBe(false);
-      expect(getPublicLlmSettings()).toMatchObject({
-        baseUrl: 'https://env.example.com/v1',
-        model: 'env-model',
-        hasApiKey: true,
-        apiKeySource: 'env',
+      const { llmRuntime } = await getModules();
+      expect(llmRuntime.getEffectiveLlmSettings()).toMatchObject({
+        llmApiKey: '',
+        llmModel: 'gpt-4-turbo-preview',
+        llmBaseUrl: 'https://api.openai.com/v1',
+      });
+      expect(llmRuntime.getPublicLlmSettings()).toMatchObject({
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-4-turbo-preview',
+        hasApiKey: false,
+        apiKeySource: 'unset',
         hasOverrides: false,
+        baseUrlSource: 'default',
+        modelSource: 'default',
       });
     } finally {
       for (const [key, value] of Object.entries(previous)) {
-        if (value === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = value;
-        }
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
       }
     }
   });

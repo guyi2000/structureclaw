@@ -1,3 +1,4 @@
+const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -9,7 +10,7 @@ const { createDockerComposeRunner } = require("./docker-compose-runner");
 const { runFrontendBuild } = require("./frontend-build");
 const runtime = require("./runtime");
 
-const MIN_NODE_MAJOR = 18;
+const MIN_NODE_MAJOR = 20;
 const ANALYSIS_REQUIRED_PYTHON_MODULES = ["uvicorn", "yaml"];
 
 function getPackageMetadata(rootDir) {
@@ -528,6 +529,12 @@ async function ensureAnalysisPython(rootDir, env) {
     env.PATH = process.env.PATH;
   }
 
+  // Resolve venv location: installed packages use the runtime data dir,
+  // source checkouts use backend/.venv (writable checkout directory).
+  const venvDir = paths.installedMode
+    ? path.join(paths.runtimeDir, ".venv")
+    : path.join(rootDir, "backend", ".venv");
+
   let resolvedPython = currentPython;
   if (!resolvedPython) {
     const pythonVersion =
@@ -537,13 +544,13 @@ async function ensureAnalysisPython(rootDir, env) {
       "venv",
       "--python",
       pythonVersion,
-      path.join(rootDir, "backend", ".venv"),
+      venvDir,
     ]);
 
     resolvedPython = runtime.resolveAnalysisPython(rootDir, env);
   }
   if (!resolvedPython) {
-    throw new Error("Failed to locate backend/.venv python after uv venv.");
+    throw new Error(`Failed to locate Python after creating venv at ${venvDir}.`);
   }
 
   await runtime.runCommand("uv", [
@@ -565,7 +572,7 @@ async function ensureAnalysisPython(rootDir, env) {
     .filter(([, present]) => !present)
     .map(([moduleName]) => moduleName);
   if (missingModules.length > 0) {
-    throw new Error(`backend/.venv is present but missing required analysis modules: ${missingModules.join(", ")}.`);
+    throw new Error(`Python venv is present but missing required analysis modules: ${missingModules.join(", ")}.`);
   }
 
   return resolvedPython;
@@ -707,7 +714,7 @@ async function invokeDbInit(rootDir, env) {
   log(`Running db:init with DATABASE_URL=${env.DATABASE_URL}`);
   await runtime.runCommand(
     runtime.getNpmCommand(),
-    ["run", "db:init", "--prefix", paths.backendDir],
+    ["run", "db:init", "--prefix", path.join(rootDir, "backend")],
     {
       env,
     },
@@ -722,13 +729,81 @@ async function invokeScopedDbInit(rootDir, env, profileName) {
   await invokeDbInit(rootDir, scopedEnv);
 }
 
-function getServiceCommand(name, frontendPort) {
+/**
+ * Remap DATABASE_URL from package-install dir to user-writable runtime dir.
+ * `ensureLocalSqliteConfig` derives URLs from rootDir (the package install
+ * directory), which is read-only for global npm installs. This function
+ * redirects the SQLite path to paths.dataDir.
+ */
+function remapInstalledSqliteDatabaseUrl(env, paths) {
+  if (typeof env.DATABASE_URL !== "string" || !env.DATABASE_URL.startsWith("file:")) {
+    return;
+  }
+  // Always use the user-writable data directory
+  env.DATABASE_URL = `file:${path.join(paths.dataDir, "structureclaw.db").replace(/\\/gu, "/")}`;
+}
+
+/**
+ * In installed mode, run prisma db push + seed directly since there is no
+ * backend package.json with npm scripts.
+ */
+async function invokeInstalledDbInit(rootDir, env, paths) {
+  runtime.ensureDirectory(paths.dataDir);
+  const prismaSchema = path.join(rootDir, "backend", "prisma", "schema.prisma");
+  if (!runtime.pathExists(prismaSchema)) {
+    log("Skipping database init — Prisma schema not found.");
+    return;
+  }
+
+  // Step 1: Ensure Prisma client is generated
+  log("Generating Prisma client...");
+  try {
+    const shellOpt = process.platform === "win32" ? true : undefined;
+    await runtime.runCommand("npx", [
+      "prisma", "generate",
+      `--schema=${prismaSchema}`,
+    ], { env, shell: shellOpt });
+    log("[ok] Prisma client generated.");
+  } catch (err) {
+    log(`[warn] Prisma generate failed: ${err.message}`);
+  }
+
+  // Step 2: Push schema to SQLite
+  log("Initializing database (installed mode)...");
+  try {
+    const shellOpt = process.platform === "win32" ? true : undefined;
+    await runtime.runCommand("npx", [
+      "prisma", "db", "push",
+      `--schema=${prismaSchema}`,
+      "--accept-data-loss",
+    ], { env, shell: shellOpt });
+    log("[ok] Database schema synced.");
+  } catch (err) {
+    log(`[warn] Database init failed: ${err.message}`);
+  }
+}
+
+function getServiceCommand(name, frontendPort, paths) {
+  // Installed package: run compiled backend directly (no npm run dev)
+  if (name === "backend" && paths.installedMode) {
+    return {
+      command: process.execPath,
+      args: [path.join(paths.backendDir, "index.js")],
+      envPatch: {},
+    };
+  }
+
   if (name === "backend") {
     return {
       command: runtime.getNpmCommand(),
       args: ["run", "dev", "--prefix", "backend"],
       envPatch: {},
     };
+  }
+
+  // Frontend not needed in installed mode (backend serves static files)
+  if (paths.installedMode) {
+    return { command: process.execPath, args: ["-e", "process.exit(0)"], envPatch: {} };
   }
 
   return {
@@ -767,7 +842,7 @@ function startTrackedService(paths, env, name, frontendPort) {
     return;
   }
 
-  const { command, args, envPatch } = getServiceCommand(name, frontendPort);
+  const { command, args, envPatch } = getServiceCommand(name, frontendPort, paths);
   const logFile = runtime.logFilePath(paths, name);
   runtime.appendSessionHeader(logFile, name);
   const pid = runtime.spawnDetached(command, args, {
@@ -1016,11 +1091,29 @@ async function invokeLocalUp(rootDir, env, options = {}) {
     programName: env.SCLAW_PROGRAM_NAME,
   });
   const { paths } = context;
+  const isInstalled = paths.installedMode;
+
+  // Ensure runtime data directory structure exists for installed packages
+  if (isInstalled) {
+    runtime.ensureDirectory(paths.dataDir);
+    runtime.ensureDirectory(paths.logDir);
+    runtime.ensureDirectory(paths.pidDir);
+    runtime.ensureDirectory(path.join(paths.dataDir, "skills"));
+    runtime.ensureDirectory(path.join(paths.dataDir, "tools"));
+  }
 
   runtime.ensureLocalSqliteConfig(rootDir, env, log, { profileName: "start" });
+  if (isInstalled) {
+    // Remap SQLite URL from package dir to user-writable runtime dir
+    remapInstalledSqliteDatabaseUrl(env, paths);
+  }
   runtime.assertSqliteDatabaseUrl(env);
-  await ensureNpmDependencies(paths.backendDir, "backend", ["prisma", "@prisma/client"]);
-  await ensureNpmDependencies(paths.frontendDir, "frontend", ["next"]);
+
+  if (!isInstalled) {
+    await ensureNpmDependencies(paths.backendDir, "backend", ["prisma", "@prisma/client"]);
+    await ensureNpmDependencies(paths.frontendDir, "frontend", ["next"]);
+  }
+
   await ensureAnalysisPython(rootDir, env);
   await ensureOpenSeesRuntime(rootDir, env);
 
@@ -1029,45 +1122,340 @@ async function invokeLocalUp(rootDir, env, options = {}) {
   }
 
   if (!options.skipDbInit) {
-    await invokeScopedDbInit(rootDir, env, "start");
+    if (isInstalled) {
+      await invokeInstalledDbInit(rootDir, env, paths);
+    } else {
+      await invokeScopedDbInit(rootDir, env, "start");
+    }
   }
 
-  // Kill any stale processes on the configured ports before starting
-  const ports = [
-    env.PORT || runtime.DEFAULT_BACKEND_PORT,
-    env.FRONTEND_PORT || runtime.DEFAULT_FRONTEND_PORT,
-  ];
+  // Kill stale processes
+  const ports = isInstalled
+    ? [env.PORT || runtime.DEFAULT_BACKEND_PORT]
+    : [env.PORT || runtime.DEFAULT_BACKEND_PORT, env.FRONTEND_PORT || runtime.DEFAULT_FRONTEND_PORT];
   runtime.killPortPids(ports, log, getPortCleanupOptions(paths, env));
 
   startTrackedService(paths, env, "backend", env.FRONTEND_PORT || runtime.DEFAULT_FRONTEND_PORT);
-  startTrackedService(paths, env, "frontend", env.FRONTEND_PORT || runtime.DEFAULT_FRONTEND_PORT);
-  log("");
-  log("Local stack started.");
-  log(`Logs: ${paths.logDir}`);
-  log(`Frontend: http://localhost:${env.FRONTEND_PORT || runtime.DEFAULT_FRONTEND_PORT}`);
-  log(`Backend:  http://localhost:${env.PORT || runtime.DEFAULT_BACKEND_PORT}`);
+
+  if (!isInstalled) {
+    startTrackedService(paths, env, "frontend", env.FRONTEND_PORT || runtime.DEFAULT_FRONTEND_PORT);
+    log("");
+    log("Local stack started.");
+    log(`Logs: ${paths.logDir}`);
+    log(`Frontend: http://localhost:${env.FRONTEND_PORT || runtime.DEFAULT_FRONTEND_PORT}`);
+    log(`Backend:  http://localhost:${env.PORT || runtime.DEFAULT_BACKEND_PORT}`);
+  } else {
+    log("");
+    log("StructureClaw started.");
+    const backendPort = env.PORT || runtime.DEFAULT_BACKEND_PORT;
+    const url = `http://localhost:${backendPort}`;
+    log(`UI + API: ${url}`);
+    log(`Data: ${paths.dataDir}`);
+    log(`Logs: ${paths.logDir}`);
+
+    // Wait briefly and check if backend is actually listening
+    await runtime.sleep(2000);
+    const backendLog = runtime.logFilePath(paths, "backend");
+    const lastLines = runtime.tailLines(backendLog, 5);
+    const hasStartupError = lastLines.some((line) =>
+      /error|Error|ERR|crashed|ENOENT|Cannot find/i.test(line)
+    );
+    if (hasStartupError) {
+      log("");
+      log("Backend failed to start. Recent log:");
+      for (const line of lastLines) {
+        log(`  ${line}`);
+      }
+      log(`Check full log: ${backendLog}`);
+      return;
+    }
+
+    // Auto-open browser in installed mode
+    setTimeout(() => openBrowser(url), 1500);
+  }
+}
+
+async function promptForFirstRunConfig(envFile, existingEnv) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  try {
+    console.log("\n=== StructureClaw First-Run Setup ===\n");
+
+    const defaultBaseUrl = existingEnv.LLM_BASE_URL || "https://api.openai.com/v1";
+    const defaultModel = existingEnv.LLM_MODEL || "gpt-4-turbo-preview";
+
+    const baseUrl = (await rl.question(`LLM base URL [${defaultBaseUrl}]: `)).trim() || defaultBaseUrl;
+    const model = (await rl.question(`LLM model [${defaultModel}]: `)).trim() || defaultModel;
+    const apiKeyPrompt = existingEnv.LLM_API_KEY
+      ? `LLM API key [press Enter to keep ${maskSecret(existingEnv.LLM_API_KEY)}]: `
+      : "LLM API key: ";
+    const apiKey = (await rl.question(apiKeyPrompt)).trim() || existingEnv.LLM_API_KEY || "";
+
+    // Write settings.json (primary user config)
+    const settingsDir = path.dirname(envFile);
+    const settingsPath = path.join(settingsDir, "settings.json");
+    const settings = {
+      server: { port: 31415, host: "0.0.0.0" },      llm: { baseUrl, model, ...(apiKey ? { apiKey } : {}) },
+      logging: { level: "info", llmLogEnabled: false },
+      updatedAt: new Date().toISOString(),
+    };
+    runtime.ensureDirectory(settingsDir);
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+    console.log(`\nConfiguration written to ${settingsPath}`);
+
+    // No .env generation — settings.json is the single config source
+    // Database URL is resolved from settings.json by the backend at runtime
+  } finally {
+    rl.close();
+  }
+}
+
+/**
+ * Test LLM connectivity by making a lightweight request to the models endpoint.
+ * Non-blocking: warns but does not fail.
+ */
+async function testLlmConnectivity(baseUrl, apiKey) {
+  if (!apiKey) {
+    log("  LLM API key not set — skipping connectivity test.");
+    return;
+  }
+  const url = baseUrl.replace(/\/+$/, "") + "/models";
+  const http = require("node:http");
+  const https = require("node:https");
+  const client = url.startsWith("https:") ? https : http;
+
+  const ok = await new Promise((resolve) => {
+    const req = client.request(
+      url,
+      {
+        method: "GET",
+        headers: { Authorization: `Bearer ${apiKey}` },
+        timeout: 10000,
+      },
+      (res) => {
+        res.resume();
+        resolve(res.statusCode || 0);
+      },
+    );
+    req.on("timeout", () => { req.destroy(); resolve(0); });
+    req.on("error", () => resolve(0));
+    req.end();
+  });
+
+  if (ok >= 200 && ok < 300) {
+    log("  LLM connectivity: OK");
+  } else if (ok === 401 || ok === 403) {
+    log("  LLM connectivity: authentication failed — verify your API key.");
+  } else if (ok === 0) {
+    log("  LLM connectivity: could not reach server — verify your base URL.");
+  } else {
+    log(`  LLM connectivity: HTTP ${ok} — verify your configuration.`);
+  }
+}
+
+/**
+ * Migrate data from old .runtime/ layout to the new ~/.structureclaw/ directory.
+ * Only runs in installed-package mode when no ~/.structureclaw/ data exists yet.
+ */
+function migrateFromRuntimeDir(paths, rootDir) {
+  const oldRuntimeDir = path.join(rootDir, ".runtime");
+  if (!runtime.pathExists(oldRuntimeDir)) {
+    return;
+  }
+  // Only migrate if the target data dir is empty
+  if (runtime.pathExists(path.join(paths.dataDir, "structureclaw.db"))) {
+    return;
+  }
+
+  log(`Detected legacy .runtime/ directory. Migrating to ${paths.runtimeDir}...`);
+
+  // Migrate .env
+  const oldEnv = path.join(rootDir, ".env");
+  if (runtime.pathExists(oldEnv) && !runtime.pathExists(paths.envFile)) {
+    fs.copyFileSync(oldEnv, paths.envFile);
+    log("  Migrated .env");
+  }
+
+  // Migrate database
+  const oldDb = path.join(oldRuntimeDir, "data", "structureclaw.db");
+  if (runtime.pathExists(oldDb)) {
+    runtime.ensureDirectory(paths.dataDir);
+    fs.copyFileSync(oldDb, path.join(paths.dataDir, "structureclaw.db"));
+    log("  Migrated database");
+  }
+
+  log("  Migration complete.");
+}
+
+/**
+ * Migrate .env values into settings.json if settings.json doesn't exist yet.
+ * This handles the upgrade path from the old .env-only config to JSON config.
+ */
+function migrateEnvToSettingsJson(paths, envFile) {
+  const settingsPath = path.join(path.dirname(paths.envFile), "settings.json");
+  if (runtime.pathExists(settingsPath)) {
+    return; // Already have JSON config
+  }
+
+  if (!runtime.pathExists(envFile)) {
+    return; // No .env to migrate from
+  }
+
+  const env = runtime.readDotEnv(envFile);
+  if (!env.LLM_BASE_URL && !env.LLM_MODEL && !env.LLM_API_KEY
+      && !env.PORT && !env.LOG_LEVEL && !env.HOST) {
+    return; // Nothing meaningful to migrate
+  }
+
+  const settings = { updatedAt: new Date().toISOString() };
+
+  // Server section
+  if (env.PORT || env.HOST) {
+    settings.server = {};
+    if (env.PORT) settings.server.port = parseInt(env.PORT, 10);
+    if (env.HOST) settings.server.host = env.HOST;
+  }
+
+  // LLM section
+  if (env.LLM_BASE_URL || env.LLM_MODEL || env.LLM_API_KEY) {
+    settings.llm = {};
+    if (env.LLM_BASE_URL) settings.llm.baseUrl = env.LLM_BASE_URL;
+    if (env.LLM_MODEL) settings.llm.model = env.LLM_MODEL;
+    if (env.LLM_API_KEY) settings.llm.apiKey = env.LLM_API_KEY;
+  }
+
+  // Logging section
+  if (env.LOG_LEVEL || env.LLM_LOG_ENABLED) {
+    settings.logging = {};
+    if (env.LOG_LEVEL) settings.logging.level = env.LOG_LEVEL;
+    if (env.LLM_LOG_ENABLED === "true") settings.logging.llmLogEnabled = true;
+  }
+
+  runtime.ensureDirectory(path.dirname(settingsPath));
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+  log(`Migrated .env settings to ${settingsPath}`);
+}
+
+/**
+ * Open a URL in the default browser.
+ */
+function openBrowser(url) {
+  const platform = process.platform;
+  let command;
+  let args;
+  if (platform === "darwin") {
+    command = "open";
+    args = [url];
+  } else if (platform === "win32") {
+    command = process.env.comspec || "cmd.exe";
+    args = ["/c", "start", "", url];
+  } else {
+    command = "xdg-open";
+    args = [url];
+  }
+  try {
+    spawn(command, args, { stdio: "ignore", detached: true }).unref();
+  } catch {
+    // Non-critical: browser didn't open, user can navigate manually
+  }
 }
 
 async function invokeDoctor(rootDir, env) {
-  runtime.requireCommand("node", "Install Node.js 18+ and retry.");
+  runtime.requireCommand("node", "Install Node.js 20+ and retry.");
   runtime.requireCommand("npm", "Install npm and retry.");
-  runtime.ensureLocalSqliteConfig(rootDir, env, log, { profileName: "doctor" });
-  runtime.assertSqliteDatabaseUrl(env);
 
   const { paths } = runtime.loadProjectEnvironment(rootDir, () => {}, {
     profile: env.SCLAW_PROFILE,
     programName: env.SCLAW_PROGRAM_NAME,
   });
-  await ensureNpmDependencies(paths.backendDir, "backend", ["prisma", "@prisma/client"]);
-  await ensureNpmDependencies(paths.frontendDir, "frontend", ["next"]);
+  const isInstalled = paths.installedMode;
+
+  // Ensure runtime data directory for installed packages
+  if (isInstalled) {
+    runtime.ensureDirectory(paths.dataDir);
+    runtime.ensureDirectory(paths.logDir);
+    runtime.ensureDirectory(paths.pidDir);
+    runtime.ensureDirectory(path.join(paths.runtimeDir, "workspace"));
+    runtime.ensureDirectory(path.join(paths.runtimeDir, "checkpoints"));
+    runtime.ensureDirectory(path.join(paths.dataDir, "skills"));
+    runtime.ensureDirectory(path.join(paths.dataDir, "tools"));
+
+    // Migrate from old .runtime/ layout if present
+    migrateFromRuntimeDir(paths, rootDir);
+
+    // Migrate .env → settings.json if needed
+    migrateEnvToSettingsJson(paths, paths.envFile);
+
+    // Interactive first-run wizard if no settings.json exists
+    if (!runtime.pathExists(path.join(path.dirname(paths.envFile), "settings.json"))) {
+      if (process.stdin.isTTY && process.stdout.isTTY) {
+        await promptForFirstRunConfig(paths.envFile, {});
+      } else {
+        // Non-interactive: create minimal settings.json with defaults
+        const settingsDir = path.dirname(paths.envFile);
+        const settingsPath = path.join(settingsDir, "settings.json");
+        const settings = {
+          server: { port: 31415, host: "0.0.0.0" },          logging: { level: "info", llmLogEnabled: false },
+          updatedAt: new Date().toISOString(),
+        };
+        runtime.ensureDirectory(settingsDir);
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+        log(`Created default configuration at ${settingsPath}`);
+      }
+    }
+  }
+
+  runtime.ensureLocalSqliteConfig(rootDir, env, log, { profileName: "doctor" });
+  if (isInstalled) {
+    remapInstalledSqliteDatabaseUrl(env, paths);
+  }
+  runtime.assertSqliteDatabaseUrl(env);
+
+  if (!isInstalled) {
+    await ensureNpmDependencies(paths.backendDir, "backend", ["prisma", "@prisma/client"]);
+    await ensureNpmDependencies(paths.frontendDir, "frontend", ["next"]);
+  }
+
   await ensureAnalysisPython(rootDir, env);
   try {
     await ensureOpenSeesRuntime(rootDir, env);
   } catch {
     log("Warning: OpenSees runtime probe failed — analysis features may be limited in this environment.");
   }
-  await invokeScopedDbInit(rootDir, env, "doctor");
-  log("Local startup checks passed.");
+
+  if (isInstalled) {
+    await invokeInstalledDbInit(rootDir, env, paths);
+  } else {
+    await invokeScopedDbInit(rootDir, env, "doctor");
+  }
+
+  // Test LLM connectivity — read from settings.json
+  const settingsPath = path.join(path.dirname(paths.envFile), "settings.json");
+  let llmBaseUrl = "https://api.openai.com/v1";
+  let llmApiKey = "";
+  try {
+    if (runtime.pathExists(settingsPath)) {
+      const settingsJson = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+      llmBaseUrl = settingsJson?.llm?.baseUrl || llmBaseUrl;
+      llmApiKey = settingsJson?.llm?.apiKey || "";
+    }
+  } catch { /* use defaults */ }
+  await testLlmConnectivity(llmBaseUrl, llmApiKey);
+
+  log("");
+  log("=== Setup Summary ===");
+  log(`  Data directory: ${paths.dataDir}`);
+  log(`  Configuration:  ${paths.envFile}`);
+  log(`  Database:       ${env.DATABASE_URL || paths.dataDir}`);
+  if (isInstalled) {
+    log("");
+    log("Run `sclaw start` to launch StructureClaw.");
+  } else {
+    log("Local startup checks passed.");
+  }
 }
 
 async function dispatch(commandName, rawArgs, rootDir) {

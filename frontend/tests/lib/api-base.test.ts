@@ -14,7 +14,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
  */
 
 describe('api-base', () => {
-  const baseUrl = 'http://localhost:8000'
+  const baseUrl = 'http://localhost:31415'
 
   beforeEach(() => {
     vi.stubEnv('NEXT_PUBLIC_API_URL', baseUrl)
@@ -28,15 +28,15 @@ describe('api-base', () => {
   })
 
   it('rewrites localhost to 127.0.0.1 in browser context', async () => {
-    vi.stubEnv('NEXT_PUBLIC_API_URL', 'http://localhost:8000')
+    vi.stubEnv('NEXT_PUBLIC_API_URL', 'http://localhost:31415')
     const { API_BASE } = await import('@/lib/api-base')
-    expect(API_BASE).toBe('http://127.0.0.1:8000')
+    expect(API_BASE).toBe('http://127.0.0.1:31415')
   })
 
   it('strips trailing slash from resolved URL', async () => {
-    vi.stubEnv('NEXT_PUBLIC_API_URL', 'http://localhost:8000/')
+    vi.stubEnv('NEXT_PUBLIC_API_URL', 'http://localhost:31415/')
     const { API_BASE } = await import('@/lib/api-base')
-    expect(API_BASE).toBe('http://127.0.0.1:8000')
+    expect(API_BASE).toBe('http://127.0.0.1:31415')
   })
 
   it('keeps non-localhost hostnames unchanged', async () => {
@@ -58,11 +58,11 @@ describe('api-base', () => {
     expect(API_BASE).toBe('not-a-valid-url')
   })
 
-  it('defaults to http://localhost:8000 when env var is unset', async () => {
+  it('returns empty string in browser when env var is unset (same-origin mode)', async () => {
     vi.stubEnv('NEXT_PUBLIC_API_URL', '')
-    // When the env var is empty string, the || fallback kicks in
+    // No explicit URL + jsdom window → same-origin installed-package mode
     const { API_BASE } = await import('@/lib/api-base')
-    expect(API_BASE).toBe('http://127.0.0.1:8000')
+    expect(API_BASE).toBe('')
   })
 
   it('handles localhost URL without port', async () => {
