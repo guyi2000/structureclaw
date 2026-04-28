@@ -38,24 +38,14 @@ frontend/   Next.js 前端应用
 backend/    Fastify API、agent skills、托管分析运行时、Prisma 模型、后端测试
 scripts/    启动脚本与契约/回归校验脚本
 docs/       手册与协议参考文档
-.runtime/   本地运行数据、日志与报告工件输出目录
+~/.structureclaw/   运行数据、日志与报告工件输出目录
 ```
 
 ## 5. 快速上手
 
-### 5.0 Node.js 安装（可选）
+### 5.0 Node.js 安装
 
-如果你还没有安装 Node.js，可以先运行自动安装脚本：
-
-```bash
-bash ./scripts/install-node-linux.sh
-```
-
-Windows PowerShell（首次安装建议使用管理员权限）：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File ./scripts/install-node-windows.ps1
-```
+需要 Node.js 18+。可通过任意方式安装（nvm、系统包管理器或 nodejs.org）。
 
 ### 5.1 推荐路径
 
@@ -128,22 +118,22 @@ node .\sclaw stop
 
 以上变量都可在 `.env` 或 shell 环境变量中覆盖。
 
-## 6. 环境变量与配置
+## 6. 配置
 
-请基于 `.env.example` 配置。
+所有设置通过 `settings.json` 管理（由 `sclaw doctor` 或前端设置界面创建）。
 
-关键变量：
+关键设置：
 
-- 运行时：`NODE_ENV`、`PORT`、`FRONTEND_PORT`
-- 数据层：`DATABASE_URL`
-- LLM：`LLM_API_KEY`、`LLM_MODEL`、`LLM_BASE_URL`（OpenAI-compatible 接口）
-- 集成：`ANALYSIS_PYTHON_BIN`、`ANALYSIS_ENGINE_MANIFEST_PATH`、`CORS_ORIGINS`
+- 运行时：`server.port`、`server.frontendPort`
+- 数据层：`database.url`
+- LLM：`llm.apiKey`、`llm.model`、`llm.baseUrl`（OpenAI-compatible 接口）
+- 集成：`analysis.pythonBin`、`analysis.engineManifestPath`、`cors.origins`
 
 说明：
 
-- `./sclaw start` 和 `./sclaw restart` 默认使用 `.runtime/data/structureclaw.start.db`；`./sclaw doctor` 使用 `.runtime/data/structureclaw.doctor.db`，确保启动预检与实际运行库隔离。
+- `./sclaw start` 和 `./sclaw restart` 默认使用 `~/.structureclaw/data/structureclaw.start.db`；`./sclaw doctor` 使用 `~/.structureclaw/data/structureclaw.doctor.db`，确保启动预检与实际运行库隔离。
 - 后端的 agent 会话与模型缓存使用当前进程内存存储。
-- `ANALYSIS_PYTHON_BIN` 默认指向 `backend/.venv/bin/python`。
+- `analysis.pythonBin` 默认指向 `~/.structureclaw/.venv/bin/python`。
 
 ## 7. 核心工作流
 

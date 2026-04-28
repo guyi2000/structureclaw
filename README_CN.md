@@ -32,18 +32,6 @@ frontend (Next.js)
 
 ## 快速启动
 
-如果你还没有安装 Node.js，可以先运行自动安装脚本：
-
-```bash
-bash ./scripts/install-node-linux.sh
-```
-
-Windows PowerShell（首次安装建议使用管理员权限）：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File ./scripts/install-node-windows.ps1
-```
-
 推荐本地流程：
 
 ```bash
@@ -62,8 +50,8 @@ powershell -ExecutionPolicy Bypass -File ./scripts/install-node-windows.ps1
 
 补充说明：
 
-- 本地默认数据库现在是 SQLite。`./sclaw start` 默认使用 `.runtime/data/structureclaw.start.db`，`./sclaw doctor` 默认使用 `.runtime/data/structureclaw.doctor.db`，这样预检不会碰当前实际运行库。
-- `./sclaw doctor` 不再要求你预先安装系统级 Python 3.12。缺失时会先确保 `uv` 可用，并自动准备带 Python 3.12 的 `backend/.venv`；在 Windows 上，如果系统未安装 `winget`，则会提示你手动安装 `uv`。
+- 本地默认数据库现在是 SQLite。`./sclaw start` 默认使用 `~/.structureclaw/data/structureclaw.start.db`，`./sclaw doctor` 默认使用 `~/.structureclaw/data/structureclaw.doctor.db`，这样预检不会碰当前实际运行库。
+- `./sclaw doctor` 不再要求你预先安装系统级 Python 3.12。缺失时会先确保 `uv` 可用，并自动准备带 Python 3.12 的虚拟环境；在 Windows 上，如果系统未安装 `winget`，则会提示你手动安装 `uv`。
 - 如果你原来的本地 `.env` 还把 `DATABASE_URL` 指向本地 PostgreSQL，`./sclaw doctor` 和 `./sclaw start` 会先自动迁移到 SQLite，再把 `.env` 改写成 SQLite 默认配置，同时把原 PostgreSQL 地址保留到 `POSTGRES_SOURCE_DATABASE_URL`。
 - 第一次自动迁移时，还会生成一个类似 `.env.pre-sqlite-migration.<timestamp>.bak` 的本地备份文件。
 - `sclaw_cn` 在未显式配置时会自动使用国内镜像默认值：`PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`、`NPM_CONFIG_REGISTRY=https://registry.npmmirror.com`，以及通过 `DOCKER_REGISTRY_MIRROR` 指定的 Docker 镜像前缀。
@@ -133,16 +121,16 @@ node .\sclaw docker-stop
 docker compose down
 ```
 
-## 环境变量
+## 配置
 
-请基于 `.env.example` 配置本地环境。
+所有设置通过 `settings.json` 管理（由 `sclaw doctor` 或前端设置界面创建）。
 
-关键变量包括：
+关键设置包括：
 
-- `PORT`、`FRONTEND_PORT`
-- `DATABASE_URL`、`POSTGRES_SOURCE_DATABASE_URL`
-- `LLM_API_KEY`、`LLM_MODEL`、`LLM_BASE_URL`（OpenAI-compatible 接口）
-- `ANALYSIS_PYTHON_BIN`、`ANALYSIS_PYTHON_TIMEOUT_MS`、`ANALYSIS_ENGINE_MANIFEST_PATH`
+- `server.port`、`server.frontendPort`
+- `database.url`（默认 SQLite）
+- `llm.apiKey`、`llm.model`、`llm.baseUrl`（OpenAI-compatible 接口）
+- `analysis.pythonBin`、`analysis.pythonTimeoutMs`、`analysis.engineManifestPath`
 
 ## 主要 API 入口
 
