@@ -8,7 +8,7 @@
 ### Agent 执行
 
 - `POST /api/v1/agent/run` — chat-first 编排入口
-- 链路：`text-to-model-draft -> convert -> validate -> analyze -> code-check -> report`
+- 链路：`识别结构类型 -> 提取草稿参数 -> 构建模型 -> 校验 -> 分析 -> 规范校核 -> 报告`
 
 ### Chat 与流式
 
@@ -24,8 +24,20 @@
 - `POST /analyze`
 - `POST /code-check`
 - `GET /schema/converters`
+- `GET /engines`
+- `GET /engines/:id`
+- `POST /engines/:id/check`
 
-### SkillHub
+内置 engine id：`builtin-opensees`、`builtin-pkpm`、`builtin-yjk`。
+
+### 运行时 Settings
+
+- `GET /api/v1/admin/settings`
+- `PUT /api/v1/admin/settings`
+
+StructureClaw 1.0 会结合运行时 `settings.json`、部分环境变量兜底（`PORT`、`FRONTEND_PORT`、`NODE_ENV`）和运行目录覆盖（`SCLAW_DATA_DIR`）解析应用配置，然后回退到内置默认值。
+
+### SkillHub 与用户扩展
 
 - `GET /api/v1/agent/skillhub/search`
 - `GET /api/v1/agent/skillhub/installed`
@@ -33,13 +45,11 @@
 - `POST /api/v1/agent/skillhub/enable`
 - `POST /api/v1/agent/skillhub/disable`
 - `POST /api/v1/agent/skillhub/uninstall`
+- `GET /api/v1/admin/skills`
+- `POST /api/v1/admin/skills/reload`
+- `GET /api/v1/admin/skills/:id`
 
-### 当前阶段能力边界（2026-04）
-
-- 当前 skill：全部按内置 skill 运行。
-- 外接 skill：指 SkillHub 技能包；该通道为预留能力，尚未投入生产执行链。
-- 当前 tool：统一按外接 tool 治理。
-- 内置 tool：指平台基础能力（如 read/write）；该通道当前为预留能力。
+用户扩展资产位于运行数据目录下的 `skills/` 与 `tools/`。
 
 优先级规则：
 

@@ -5,19 +5,34 @@
 
 ## Quick Start
 
-### Node.js setup
-
-Node.js 18+ is required. Install it via your preferred method (nvm, system package manager, or nodejs.org).
-
-### Recommended path
+### Installed package path
 
 ```bash
-./sclaw doctor   # pre-check (Node, Python, SQLite, deps)
-./sclaw start    # start full local service stack
-./sclaw status   # check service health
-./sclaw logs     # view logs
-./sclaw stop     # stop all services
+npm install -g @structureclaw/structureclaw
+sclaw doctor
+sclaw start
+sclaw status
+sclaw logs
+sclaw stop
 ```
+
+Installed mode runs as a single process and stores runtime data under the user data directory, such as `~/.structureclaw/`.
+
+### Source checkout path
+
+```bash
+./sclaw doctor
+./sclaw start
+./sclaw status
+./sclaw logs
+./sclaw stop
+```
+
+Source mode starts backend/frontend as development processes and uses the user runtime directory by default, such as `~/.structureclaw/`.
+
+### Node.js setup
+
+Node.js 20+ is required. Install it via your preferred method (nvm, system package manager, or nodejs.org).
 
 Windows PowerShell:
 

@@ -234,6 +234,7 @@ Convert the PR to ready-for-review only after the validation checklist is meanin
 - Use `settings.json` (via `sclaw doctor` or frontend Settings UI) for configuration.
 - Keep production credentials outside the repository.
 - Document new configuration defaults when your change depends on them.
+- Report sensitive security issues through the private process described in [SECURITY.md](SECURITY.md), not public issues.
 
 ## Communication Tips
 
@@ -244,3 +245,5 @@ Convert the PR to ready-for-review only after the validation checklist is meanin
 ## Language Counterpart
 
 Chinese version: [CONTRIBUTING_CN.md](CONTRIBUTING_CN.md)
+
+Please also follow the organization-level [Code of Conduct](https://github.com/structureclaw/.github/blob/main/CODE_OF_CONDUCT.md).

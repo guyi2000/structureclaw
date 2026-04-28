@@ -92,14 +92,14 @@ tool 不存在 YAML 发现路径。新增 tool 必须修改代码注册表，在
 
 - `active`：已进入主编排，参与激活、授权、执行与 trace。
 - `partial`：已接入 runtime，但仍属于平台托管或非完整一等 skill 包。
-- `discoverable`：已纳入 taxonomy，但当前尚未进入主编排。
+- `discoverable`：已纳入 taxonomy 与 catalog，但不会自动参与主编排。
 - `reserved`：仅保留架构位点，当前未提供实际运行时能力。
 
 ### 2.6 分析引擎可用性与 Skill 影响
 
 skill 内声明的 `engineId` 只是静态路由提示，并不等于该 engine 在运行时一定可用。
 
-- skill 可以声明自己面向的分析引擎族，例如当前的 OpenSees，或未来可能接入的 YJK / PKPM。
+- skill 可以声明自己面向的分析引擎族。当前内置 engine family 包括 OpenSees、PKPM 和 YJK。
 - 真正的运行时 engine 集合来自 engine catalog 以及当前运行健康状态。
 - analysis skill 在进入执行前，runtime 必须校验候选 engine 是否：
   - 已启用

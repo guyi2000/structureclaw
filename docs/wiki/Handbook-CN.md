@@ -5,19 +5,34 @@
 
 ## 快速开始
 
-### Node.js 安装
-
-需要 Node.js 18+。可通过任意方式安装（nvm、系统包管理器或 nodejs.org）。
-
-### 推荐路径
+### npm 安装版
 
 ```bash
-./sclaw doctor   # 预检（Node、Python、SQLite、依赖）
-./sclaw start    # 启动完整本地服务栈
-./sclaw status   # 检查服务健康状态
-./sclaw logs     # 查看日志
-./sclaw stop     # 停止所有服务
+npm install -g @structureclaw/structureclaw
+sclaw doctor
+sclaw start
+sclaw status
+sclaw logs
+sclaw stop
 ```
+
+安装版以单进程运行，并把运行数据放在用户数据目录，例如 `~/.structureclaw/`。
+
+### 源码开发版
+
+```bash
+./sclaw doctor
+./sclaw start
+./sclaw status
+./sclaw logs
+./sclaw stop
+```
+
+源码模式以开发进程启动 backend/frontend，并默认使用用户运行目录，例如 `~/.structureclaw/`。
+
+### Node.js 安装
+
+需要 Node.js 20+。可通过任意方式安装（nvm、系统包管理器或 nodejs.org）。
 
 Windows PowerShell:
 
@@ -36,6 +51,14 @@ Docker:
 ./sclaw docker-start     # 启动 Docker Compose 服务栈
 ./sclaw docker-stop      # 停止 Docker Compose 服务栈
 ./sclaw docker-status    # 检查 Docker 服务健康状态
+```
+
+国内镜像入口（子命令相同）：
+
+```bash
+./sclaw_cn doctor
+./sclaw_cn setup-analysis-python
+./sclaw_cn docker-start
 ```
 
 ### SkillHub CLI

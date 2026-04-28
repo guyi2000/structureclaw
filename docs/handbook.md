@@ -19,11 +19,30 @@ Primary workflow:
 natural language -> detect_structure_type -> extract_draft_params -> build_model -> validate_model -> run_analysis -> run_code_check -> generate_report
 ```
 
+High-level runtime flow:
+
+```mermaid
+flowchart LR
+  User[Engineer] --> Chat[Chat-first UI]
+  Chat --> API[Fastify API]
+  API --> Agent[LangGraph agent]
+  Agent --> Draft[Draft model]
+  Draft --> Validate[Validate]
+  Validate --> Analyze[Analyze]
+  Analyze --> Check[Code check]
+  Check --> Report[Report]
+```
+
 ## 3. Prerequisites
 
-Recommended local setup:
+Recommended installed setup:
 
-- Node.js 18+
+- Node.js 20+
+- npm
+
+Recommended source-development setup:
+
+- Node.js 20+
 - Python 3.12
 
 Optional:
@@ -43,11 +62,22 @@ docs/       handbook and protocol reference
 
 ## 5. Getting Started
 
-### 5.0 Node.js setup
+### 5.0 Installed package path
 
-Node.js 18+ is required. Install it via your preferred method (nvm, system package manager, or nodejs.org).
+For normal usage:
 
-### 5.1 Recommended path
+```bash
+npm install -g @structureclaw/structureclaw
+sclaw doctor
+sclaw start
+sclaw status
+```
+
+Installed mode runs as a single process: the backend serves the exported frontend and starts the hosted runtime services from the installed package. Runtime data is stored in the user data directory, such as `~/.structureclaw/`, not in the npm package directory.
+
+### 5.1 Source checkout path
+
+For repository development:
 
 ```bash
 ./sclaw doctor
@@ -55,17 +85,21 @@ Node.js 18+ is required. Install it via your preferred method (nvm, system packa
 ./sclaw status
 ```
 
-`./sclaw start` is the SQLite local-first startup path. It starts frontend and backend from source and does not invoke Docker.
+Source mode also uses the user runtime directory by default, such as `~/.structureclaw/`, and starts backend/frontend as development processes.
 
-### 5.2 Common lifecycle commands
+### 5.2 Node.js setup
+
+Node.js 20+ is required. Install it via your preferred method (nvm, system package manager, or nodejs.org).
+
+### 5.3 Installed CLI lifecycle commands
 
 ```bash
-./sclaw logs
-./sclaw stop
-./sclaw restart
+sclaw logs
+sclaw stop
+sclaw restart
 ```
 
-### 5.3 CLI alternative
+### 5.4 CLI alternative
 
 ```bash
 ./sclaw doctor
@@ -75,7 +109,7 @@ Node.js 18+ is required. Install it via your preferred method (nvm, system packa
 ./sclaw stop
 ```
 
-### 5.4 Windows PowerShell
+### 5.5 Windows PowerShell
 
 ```powershell
 node .\sclaw doctor
@@ -87,7 +121,16 @@ node .\sclaw stop
 
 For Docker-based Windows onboarding, use `node .\sclaw docker-install`, `node .\sclaw docker-start`, and `node .\sclaw docker-stop`.
 
-### 5.5 SkillHub CLI
+### 5.6 User skills and tools
+
+StructureClaw 1.0 supports workspace-local extension assets in the user runtime directory:
+
+- `skills/<name>/skill.yaml` plus stage Markdown files and optional `handler.js`
+- `tools/<name>/tool.yaml` plus `tool.js`
+
+Built-in skills win on id collision. Use `sclaw doctor` or `sclaw start` to create the runtime directories automatically.
+
+### 5.7 SkillHub CLI
 
 Manage installable skills from the command line:
 
@@ -100,7 +143,7 @@ Manage installable skills from the command line:
 ./sclaw skill uninstall <skill-id>          # uninstall a skill
 ```
 
-### 5.6 China mirror CLI entrypoint
+### 5.8 China mirror CLI entrypoint
 
 `sclaw_cn` keeps the same subcommands as `sclaw` and applies mirror defaults when not set explicitly.
 
@@ -120,20 +163,51 @@ You can override any of them in `.env` or shell environment variables.
 
 ## 6. Environment and Configuration
 
-All settings are managed through `settings.json` (created by `sclaw doctor` or the frontend Settings UI).
+StructureClaw 1.0 resolves configuration in this order:
 
-Key settings:
+1. `settings.json` in the runtime data directory
+2. Built-in defaults
 
-- Runtime: `server.port`, `server.frontendPort`
-- Data: `database.url`
-- LLM: `llm.apiKey`, `llm.model`, `llm.baseUrl` (OpenAI-compatible)
-- Integration: `analysis.pythonBin`, `analysis.engineManifestPath`, `cors.origins`
+Selected environment variables still act as runtime fallbacks or directory controls. `PORT`, `FRONTEND_PORT`, and `NODE_ENV` are read when the matching setting is absent, while `SCLAW_DATA_DIR` changes the runtime directory used to locate `settings.json` and data files.
+
+The frontend General Settings panel writes `settings.json` through the backend admin API and labels each value by source (`runtime` or `default`).
+
+Runtime data locations:
+
+- Default: user data directory such as `~/.structureclaw/`
+- Override: `SCLAW_DATA_DIR`
+
+Configuration resolution:
+
+```mermaid
+flowchart TD
+  Settings[Runtime settings.json] --> Effective[Effective backend config]
+  Defaults[Built-in defaults] --> Effective
+  Env[Selected environment variables] --> Effective
+  UI[General Settings panel] --> Settings
+  Doctor[sclaw doctor] --> Settings
+```
+
+Important settings sections:
+
+- `server`: host, backend port, frontend port, body limit
+- `llm`: OpenAI-compatible endpoint, model, API key, timeout, retries
+- `database`: SQLite URL
+- `logging`: app log level, LLM logs, rotation limits
+- `analysis`: Python interpreter, timeout, engine manifest path
+- `storage`: reports directory and max upload size
+- `cors`: allowed origins
+- `agent`: workspace root, checkpoints, shell-tool policy
+- `pkpm`: `JWSCYCLE.exe` path and PKPM work directory
+- `yjk`: YJK install root, `yjks.exe`, bundled Python, work directory, version, timeout, headless mode
 
 Notes:
 
+- `sclaw doctor` prepares the Python analysis environment. If a system Python 3.12 is missing, it ensures `uv` is available and prepares a Python 3.12 virtual environment under the user runtime directory.
 - `./sclaw start` and `./sclaw restart` default to `~/.structureclaw/data/structureclaw.start.db`; `./sclaw doctor` uses `~/.structureclaw/data/structureclaw.doctor.db` so startup checks stay isolated from the active local runtime database.
+- If an old local `.env` points `DATABASE_URL` at local PostgreSQL, `./sclaw doctor` and `./sclaw start` auto-migrate that data into SQLite, rewrite `.env` to the SQLite default, and keep the original PostgreSQL URL in `POSTGRES_SOURCE_DATABASE_URL`.
 - Backend agent sessions and model cache use an in-memory store in the current process.
-- `analysis.pythonBin` defaults to `~/.structureclaw/.venv/bin/python`.
+- Commercial analysis engines still require local software installation and valid licensing.
 
 ## 7. Primary Workflows
 
@@ -151,9 +225,9 @@ Current execution chain:
 
 Architecture note:
 
-- Public product interaction should converge on a single chat-first entry.
+- Public product interaction uses the chat-first entry points.
 - Skills and tools are optional capability layers.
-- See `docs/agent-architecture.md` for the target capability-driven design.
+- See `docs/agent-architecture.md` for the current LangGraph agent design.
 
 ### 7.2 Backend-hosted analysis runtime
 
@@ -164,6 +238,31 @@ Execution endpoints exposed by backend:
 - `POST /analyze`
 - `POST /code-check`
 - `GET /engines`
+
+Built-in analysis engines:
+
+| Engine id | Software | Current role |
+|---|---|---|
+| `builtin-opensees` | OpenSeesPy | Default open analysis engine for static, dynamic, seismic, and nonlinear workflows |
+| `builtin-pkpm` | PKPM SATWE | Commercial static-analysis path and SATWE project/result integration |
+| `builtin-yjk` | YJK 8.0 | Commercial static-analysis path with YDB conversion, YJK calculation, and structured result extraction |
+
+Analysis execution shape:
+
+```mermaid
+flowchart TD
+  Request[run_analysis request] --> Registry[Engine registry]
+  Registry --> Selection{Selected engine}
+  Selection -->|builtin-opensees| OpenSees[OpenSees runtime]
+  Selection -->|builtin-pkpm| PKPM[PKPM SATWE adapter]
+  Selection -->|builtin-yjk| YJK[YJK adapter]
+  YJK --> YDB[V2 to YDB]
+  YJK --> Calc[YJK calculation]
+  YJK --> Extract[extract_results.py]
+  OpenSees --> Result[AnalysisResult JSON]
+  PKPM --> Result
+  Extract --> Result
+```
 
 ## 8. StructureModel Governance
 
@@ -176,7 +275,7 @@ Execution endpoints exposed by backend:
 - Skills and tools are optional capability layers, not a hard dependency for base chat.
 - If no engineering skills are enabled, StructureClaw should stay on the base chat path.
 - `structure-type` is the engineering entry skill domain.
-- The target architecture includes a built-in `structure-type/generic` fallback skill inside that domain.
+- The current built-in `structure-type/generic` skill provides the generic fallback path for engineering drafts.
 - New user-visible copy must be provided in both English and Chinese.
 
 Built-in skill domains under `backend/src/agent-skills/`:
@@ -184,7 +283,7 @@ Built-in skill domains under `backend/src/agent-skills/`:
 | Domain | Description |
 |---|---|
 | `structure-type` | Structural type recognition (beam, frame, truss, portal-frame, etc.) |
-| `analysis` | OpenSees and Simplified analysis execution |
+| `analysis` | OpenSees, PKPM, and YJK analysis execution |
 | `code-check` | Design code compliance checking |
 | `data-input` | Structured data input parsing |
 | `design` | Structural design assistance |
