@@ -1,4 +1,4 @@
-import { ChatOpenAI } from '@langchain/openai';
+import type { ChatOpenAI } from '@langchain/openai';
 import type { AppLocale } from '../services/locale.js';
 import { buildReportDomainArtifacts } from '../agent-skills/report-export/entry.js';
 import {
@@ -19,6 +19,7 @@ import {
 } from './skill-manifest-loader.js';
 import type {
   AgentSkillBundle,
+  AgentSkillPlugin,
   DraftParameterExtractionResult,
   DraftState,
   StructuralTypeMatch,
@@ -434,7 +435,7 @@ export class AgentSkillRuntime {
     return this.registry.detectStructuralType(message, locale, currentState, skillIds);
   }
 
-  async resolvePluginForType(skillId: string, skillIds?: string[]): Promise<import('./types.js').AgentSkillPlugin | null> {
+  async resolvePluginForType(skillId: string, skillIds?: string[]): Promise<AgentSkillPlugin | null> {
     return this.registry.resolvePluginForIdentifier(skillId, skillIds);
   }
 

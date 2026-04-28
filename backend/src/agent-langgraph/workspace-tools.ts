@@ -1,6 +1,7 @@
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import fs from 'fs/promises';
+import type { Dirent } from 'fs';
 import path from 'path';
 import type { LangGraphRunnableConfig } from '@langchain/langgraph';
 import type { AgentConfigurable } from './configurable.js';
@@ -48,7 +49,7 @@ function globToRegex(pattern: string): RegExp {
 
 async function collectFiles(root: string, dir: string, depth: number, pattern: RegExp, result: string[]): Promise<void> {
   if (depth > 10) return;
-  let entries: import('fs').Dirent[];
+  let entries: Dirent[];
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
