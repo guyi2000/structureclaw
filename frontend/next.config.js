@@ -3,9 +3,10 @@ const path = require('path')
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  swcMinify: true,
   output: 'export',
-  distDir: 'out',
+  turbopack: {
+    root: __dirname,
+  },
 }
 
 // Only inject NEXT_PUBLIC_API_URL when explicitly set (dev mode).

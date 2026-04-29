@@ -36,6 +36,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Install Linux system dependencies for OpenSeesPy
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gfortran libopenblas-dev
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -43,6 +47,9 @@ jobs:
 
       - name: Install backend dependencies
         run: npm install --prefix backend
+
+      - name: Generate Prisma client
+        run: npm run db:generate --prefix backend
 
       - name: Build backend
         run: npm run build --prefix backend

@@ -77,8 +77,8 @@ fs.mkdirSync(path.dirname(databasePath), { recursive: true });
 
 const useExistingDatabase = fs.existsSync(databasePath) && fs.statSync(databasePath).size > 0;
 const diffArgs = useExistingDatabase
-  ? ['prisma', 'migrate', 'diff', '--from-url', databaseUrl, '--to-schema-datamodel', schemaPath, '--script']
-  : ['prisma', 'migrate', 'diff', '--from-empty', '--to-schema-datamodel', schemaPath, '--script'];
+  ? ['prisma', 'migrate', 'diff', '--from-config-datasource', '--to-schema', schemaPath, '--script']
+  : ['prisma', 'migrate', 'diff', '--from-empty', '--to-schema', schemaPath, '--script'];
 
 const migrationSql = runPrisma(diffArgs, databaseUrl);
 const trimmedSql = migrationSql.trim();
@@ -92,7 +92,7 @@ const tempSqlPath = path.join(os.tmpdir(), `structureclaw-sqlite-sync-${process.
 fs.writeFileSync(tempSqlPath, migrationSql, 'utf8');
 
 try {
-  runPrisma(['prisma', 'db', 'execute', '--schema', schemaPath, '--file', tempSqlPath], databaseUrl);
+  runPrisma(['prisma', 'db', 'execute', '--file', tempSqlPath], databaseUrl);
 } finally {
   fs.rmSync(tempSqlPath, { force: true });
 }

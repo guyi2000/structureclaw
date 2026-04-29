@@ -33,10 +33,16 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      NEXT_TELEMETRY_DISABLED: 1
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+
+      - name: Install Linux system dependencies for OpenSeesPy
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gfortran libopenblas-dev
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -47,6 +53,9 @@ jobs:
 
       - name: Setup via sclaw
         run: node ./sclaw doctor
+
+      - name: Generate Prisma client
+        run: npm run db:generate --prefix backend
 
       - name: Build via sclaw
         run: node ./sclaw build

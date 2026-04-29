@@ -5,12 +5,12 @@
   "license": "MIT",
   "type": "commonjs",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.19.0"
   },
   "os": ["win32", "darwin", "linux"],
   "bin": {
-    "sclaw": "./bin/sclaw.js",
-    "sclaw_cn": "./bin/sclaw_cn.js"
+    "sclaw": "./sclaw",
+    "sclaw_cn": "./sclaw_cn"
   },
   "repository": {
     "type": "git",
@@ -21,7 +21,8 @@
     "url": "https://github.com/structureclaw/structureclaw/issues"
   },
   "files": [
-    "bin/",
+    "sclaw",
+    "sclaw_cn",
     "dist/backend/",
     "!dist/backend/**/*.map",
     "!dist/backend/**/*.d.ts",
@@ -62,16 +63,16 @@
     "@langchain/core": "^1.1.40",
     "@langchain/langgraph": "^1.2.9",
     "@langchain/openai": "^1.4.4",
-    "@prisma/client": "^6.19.2",
+    "@prisma/client": "^7.8.0",
     "fastify": "^5.8.5",
     "pino": "^10.3.1",
     "pino-pretty": "^13.1.3",
-    "prisma": "^6.19.2",
+    "prisma": "^7.8.0",
     "yaml": "^2.8.1",
-    "zod": "^3.22.4"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "typescript": "^5.8.3"
+    "typescript": "^6.0.3"
   },
   "optionalDependencies": {
     "pg": "^8.20.0"

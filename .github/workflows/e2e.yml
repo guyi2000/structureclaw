@@ -92,12 +92,18 @@ jobs:
       group: e2e-${{ github.event.issue.number || github.sha }}
       cancel-in-progress: true
     timeout-minutes: 20
+    env:
+      NEXT_TELEMETRY_DISABLED: 1
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.check-permission.outputs.pr_sha }}
+
+      - name: Install Linux system dependencies for OpenSeesPy
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gfortran libopenblas-dev
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
