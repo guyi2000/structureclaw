@@ -1,4 +1,6 @@
-const path = require('path')
+import path from 'node:path'
+
+const __dirname = import.meta.dirname
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -16,4 +18,4 @@ if (process.env.NEXT_PUBLIC_API_URL) {
   nextConfig.env = { NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL }
 }
 
-module.exports = nextConfig
+export default nextConfig

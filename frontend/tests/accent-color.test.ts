@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll } from 'vitest'
-import fs from 'fs'
-import path from 'path'
+import fs from 'node:fs'
+import path from 'node:path'
+
+const __dirname = import.meta.dirname
 
 describe('Custom Accent Color (DSGN-06)', () => {
   const globalsPath = path.resolve(__dirname, '../src/app/globals.css')

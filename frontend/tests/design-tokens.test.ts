@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import fs from 'fs'
-import path from 'path'
+import fs from 'node:fs'
+import path from 'node:path'
+
+const __dirname = import.meta.dirname
 
 const globalsCss = fs.readFileSync(path.resolve(__dirname, '../src/app/globals.css'), 'utf-8')
 

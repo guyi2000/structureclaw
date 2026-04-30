@@ -2,6 +2,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, it, expect } from 'vitest'
 
+const __dirname = import.meta.dirname
+
 describe('PostCSS/Tailwind pipeline guard', () => {
   it('has postcss.config.js with @tailwindcss/postcss plugin', () => {
     const configPath = path.resolve(__dirname, '../postcss.config.js')
