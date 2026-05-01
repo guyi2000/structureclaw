@@ -231,6 +231,11 @@ export function langGraphEventToChunks(
             },
           });
 
+          const toolBlockerReason = extractToolBlockerReason(toolName, content);
+          if (toolBlockerReason) {
+            chunks.push({ type: 'summary_replace', summaryText: toolBlockerReason });
+          }
+
           // Emit artifact_payload_sync for tool outputs containing model/analysis/report
           if (content) {
             chunks.push(...emitArtifactSync(content, nodeState));
@@ -376,6 +381,41 @@ function emitArtifactSync(toolOutput: string, nodeState?: any): AgentStreamChunk
     // Not JSON — skip artifact sync
   }
   return chunks;
+}
+
+const USER_ACTIONABLE_FAILURE_TOOLS = new Set(['memory']);
+const LOCAL_PATH_PATTERN = /(?:[A-Za-z]:\\|\/)[^\s"'`]+/g;
+
+function sanitizeToolBlockerReason(message: string): string | undefined {
+  const normalized = message
+    .replace(/\s+/g, ' ')
+    .replace(LOCAL_PATH_PATTERN, '[path]')
+    .trim();
+
+  if (!normalized) return undefined;
+
+  const maxLength = 240;
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
+function extractToolBlockerReason(toolName: string, toolOutput: string): string | undefined {
+  try {
+    const parsed = JSON.parse(toolOutput) as Record<string, unknown>;
+    if (toolName === 'extract_draft_params' && parsed.canProceed === false && typeof parsed.reason === 'string') {
+      return sanitizeToolBlockerReason(parsed.reason);
+    }
+    if (
+      USER_ACTIONABLE_FAILURE_TOOLS.has(toolName)
+      && parsed.success === false
+      && typeof parsed.message === 'string'
+    ) {
+      return sanitizeToolBlockerReason(parsed.message);
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
