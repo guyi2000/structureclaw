@@ -35,13 +35,8 @@ function resolveReportsDir(rawValue: string | undefined): string {
   return path.resolve(__dirname, '../../../', trimmed);
 }
 
-const llmApiKey = fileSettings?.llm?.apiKey ?? '';
-const llmModel = fileSettings?.llm?.model || process.env.LLM_MODEL || 'gpt-4-turbo-preview';
-const llmBaseUrl = fileSettings?.llm?.baseUrl || process.env.LLM_BASE_URL || 'https://api.openai.com/v1';
 const frontendPort = fileSettings?.server?.frontendPort?.toString() ?? (process.env.FRONTEND_PORT || '31416');
 const backendPort = fileSettings?.server?.port ?? (parseInt(process.env.PORT || '', 10) || 31415);
-const analysisEngineManifestPath = fileSettings?.analysis?.engineManifestPath
-  ?? path.join(runtimeBaseDir, 'analysis-engines.json');
 const defaultAnalysisPythonBin = process.platform === 'win32'
   ? path.join(runtimeBaseDir, '.venv', 'Scripts', 'python.exe')
   : path.join(runtimeBaseDir, '.venv', 'bin', 'python');
@@ -60,6 +55,64 @@ const corsOrigins = (fileSettings?.cors?.origins ?? defaultCorsOrigins.join(',')
 
 export { runtimeBaseDir };
 
+const LLM_DEFAULTS = {
+  baseUrl: 'https://api.openai.com/v1',
+  model: 'gpt-4-turbo-preview',
+  timeoutMs: 180000,
+  maxRetries: 0,
+} as const;
+
+const ANALYSIS_DEFAULTS = {
+  engineManifestPath: path.join(runtimeBaseDir, 'analysis-engines.json'),
+  pythonTimeoutMs: 600000,
+} as const;
+
+const AGENT_DEFAULTS = {
+  workspaceRoot: runtimeBaseDir,
+  checkpointDir: path.join(runtimeBaseDir, 'agent-checkpoints'),
+  allowShell: false,
+  allowedShellCommands: 'node,npm,python,python3,./sclaw,./sclaw_cn',
+  shellTimeoutMs: 300000,
+} as const;
+
+const PKPM_DEFAULTS = {
+  cyclePath: '',
+  workDir: path.join(runtimeBaseDir, 'analysis', 'pkpm'),
+} as const;
+
+const YJK_DEFAULTS = {
+  installRoot: '',
+  exePath: '',
+  pythonBin: '',
+  workDir: path.join(runtimeBaseDir, 'analysis', 'yjk'),
+  version: '8.0.0',
+  timeoutS: 600,
+  invisible: false,
+  launcherPrewarm: 'auto',
+  launcherPrewarmS: 18,
+  directReadyTimeoutS: 12,
+} as const;
+
+function getCurrentLlmSettings() {
+  return readSettingsFile()?.llm;
+}
+
+function getCurrentAnalysisSettings() {
+  return readSettingsFile()?.analysis;
+}
+
+function getCurrentAgentSettings() {
+  return readSettingsFile()?.agent;
+}
+
+function getCurrentPkpmSettings() {
+  return readSettingsFile()?.pkpm;
+}
+
+function getCurrentYjkSettings() {
+  return readSettingsFile()?.yjk;
+}
+
 export const config = {
   // 服务配置
   port: typeof backendPort === 'number' ? backendPort : parseInt(String(backendPort), 10),
@@ -72,16 +125,32 @@ export const config = {
   databaseUrl: process.env.DATABASE_URL || fileSettings?.database?.url || defaultSqliteDatabaseUrl,
 
   // AI 配置
-  llmApiKey,
-  llmModel,
-  llmBaseUrl,
-  llmTimeoutMs: fileSettings?.llm?.timeoutMs ?? 180000,
-  llmMaxRetries: fileSettings?.llm?.maxRetries ?? 0,
+  get llmApiKey() {
+    return getCurrentLlmSettings()?.apiKey ?? '';
+  },
+  get llmModel() {
+    return getCurrentLlmSettings()?.model || process.env.LLM_MODEL || LLM_DEFAULTS.model;
+  },
+  get llmBaseUrl() {
+    return getCurrentLlmSettings()?.baseUrl || process.env.LLM_BASE_URL || LLM_DEFAULTS.baseUrl;
+  },
+  get llmTimeoutMs() {
+    return getCurrentLlmSettings()?.timeoutMs ?? LLM_DEFAULTS.timeoutMs;
+  },
+  get llmMaxRetries() {
+    return getCurrentLlmSettings()?.maxRetries ?? LLM_DEFAULTS.maxRetries;
+  },
 
   // 分析执行配置
-  analysisPythonBin: fileSettings?.analysis?.pythonBin ?? defaultAnalysisPythonBin,
-  analysisPythonTimeoutMs: fileSettings?.analysis?.pythonTimeoutMs ?? 600000,
-  analysisEngineManifestPath,
+  get analysisPythonBin() {
+    return getCurrentAnalysisSettings()?.pythonBin ?? defaultAnalysisPythonBin;
+  },
+  get analysisPythonTimeoutMs() {
+    return getCurrentAnalysisSettings()?.pythonTimeoutMs ?? ANALYSIS_DEFAULTS.pythonTimeoutMs;
+  },
+  get analysisEngineManifestPath() {
+    return getCurrentAnalysisSettings()?.engineManifestPath ?? ANALYSIS_DEFAULTS.engineManifestPath;
+  },
 
   // CORS
   corsOrigins,
@@ -104,27 +173,61 @@ export const config = {
   llmLogDir: fileSettings?.logging?.llmLogDir ?? path.join(runtimeBaseDir, 'logs'),
 
   // Agent 配置
-  agentWorkspaceRoot: fileSettings?.agent?.workspaceRoot ?? runtimeBaseDir,
-  agentCheckpointDir: fileSettings?.agent?.checkpointDir ?? path.join(runtimeBaseDir, 'agent-checkpoints'),
-  agentAllowShell: fileSettings?.agent?.allowShell ?? false,
-  agentAllowedShells: fileSettings?.agent?.allowedShellCommands ?? 'node,npm,python,python3,./sclaw,./sclaw_cn',
-  agentShellTimeoutMs: fileSettings?.agent?.shellTimeoutMs ?? 300000,
+  get agentWorkspaceRoot() {
+    return getCurrentAgentSettings()?.workspaceRoot ?? AGENT_DEFAULTS.workspaceRoot;
+  },
+  get agentCheckpointDir() {
+    return getCurrentAgentSettings()?.checkpointDir ?? AGENT_DEFAULTS.checkpointDir;
+  },
+  get agentAllowShell() {
+    return getCurrentAgentSettings()?.allowShell ?? AGENT_DEFAULTS.allowShell;
+  },
+  get agentAllowedShells() {
+    return getCurrentAgentSettings()?.allowedShellCommands ?? AGENT_DEFAULTS.allowedShellCommands;
+  },
+  get agentShellTimeoutMs() {
+    return getCurrentAgentSettings()?.shellTimeoutMs ?? AGENT_DEFAULTS.shellTimeoutMs;
+  },
 
   // PKPM 引擎配置
-  pkpmCyclePath: fileSettings?.pkpm?.cyclePath ?? '',
-  pkpmWorkDir: fileSettings?.pkpm?.workDir ?? path.join(runtimeBaseDir, 'analysis', 'pkpm'),
+  get pkpmCyclePath() {
+    return getCurrentPkpmSettings()?.cyclePath ?? PKPM_DEFAULTS.cyclePath;
+  },
+  get pkpmWorkDir() {
+    return getCurrentPkpmSettings()?.workDir ?? PKPM_DEFAULTS.workDir;
+  },
 
   // YJK 引擎配置
-  yjkInstallRoot: fileSettings?.yjk?.installRoot ?? '',
-  yjkExePath: fileSettings?.yjk?.exePath ?? '',
-  yjkPythonBin: fileSettings?.yjk?.pythonBin ?? '',
-  yjkWorkDir: fileSettings?.yjk?.workDir ?? path.join(runtimeBaseDir, 'analysis', 'yjk'),
-  yjkVersion: fileSettings?.yjk?.version ?? '8.0.0',
-  yjkTimeoutS: fileSettings?.yjk?.timeoutS ?? 600,
-  yjkInvisible: fileSettings?.yjk?.invisible ?? false,
-  yjkLauncherPrewarm: fileSettings?.yjk?.launcherPrewarm ?? 'auto',
-  yjkLauncherPrewarmS: fileSettings?.yjk?.launcherPrewarmS ?? 18,
-  yjkDirectReadyTimeoutS: fileSettings?.yjk?.directReadyTimeoutS ?? 12,
+  get yjkInstallRoot() {
+    return getCurrentYjkSettings()?.installRoot ?? YJK_DEFAULTS.installRoot;
+  },
+  get yjkExePath() {
+    return getCurrentYjkSettings()?.exePath ?? YJK_DEFAULTS.exePath;
+  },
+  get yjkPythonBin() {
+    return getCurrentYjkSettings()?.pythonBin ?? YJK_DEFAULTS.pythonBin;
+  },
+  get yjkWorkDir() {
+    return getCurrentYjkSettings()?.workDir ?? YJK_DEFAULTS.workDir;
+  },
+  get yjkVersion() {
+    return getCurrentYjkSettings()?.version ?? YJK_DEFAULTS.version;
+  },
+  get yjkTimeoutS() {
+    return getCurrentYjkSettings()?.timeoutS ?? YJK_DEFAULTS.timeoutS;
+  },
+  get yjkInvisible() {
+    return getCurrentYjkSettings()?.invisible ?? YJK_DEFAULTS.invisible;
+  },
+  get yjkLauncherPrewarm() {
+    return getCurrentYjkSettings()?.launcherPrewarm ?? YJK_DEFAULTS.launcherPrewarm;
+  },
+  get yjkLauncherPrewarmS() {
+    return getCurrentYjkSettings()?.launcherPrewarmS ?? YJK_DEFAULTS.launcherPrewarmS;
+  },
+  get yjkDirectReadyTimeoutS() {
+    return getCurrentYjkSettings()?.directReadyTimeoutS ?? YJK_DEFAULTS.directReadyTimeoutS;
+  },
 };
 
 export type Config = typeof config;

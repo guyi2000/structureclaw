@@ -53,6 +53,197 @@ describe('backend runtime llm settings', () => {
     }
   });
 
+  test('hot-reloads direct settings.json changes without module reload', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'structureclaw-llm-settings-'));
+    const previous = {
+      SCLAW_DATA_DIR: process.env.SCLAW_DATA_DIR,
+      LLM_MODEL: process.env.LLM_MODEL,
+      LLM_BASE_URL: process.env.LLM_BASE_URL,
+    };
+
+    delete process.env.LLM_MODEL;
+    delete process.env.LLM_BASE_URL;
+    process.env.SCLAW_DATA_DIR = tempDir;
+
+    const settingsPath = path.join(tempDir, 'settings.json');
+    fs.writeFileSync(settingsPath, JSON.stringify({
+      llm: {
+        apiKey: 'runtime-secret-before',
+        model: 'runtime-model-before',
+        baseUrl: 'https://before.example.com/v1',
+      },
+    }));
+
+    try {
+      const { llmRuntime, config } = await getModules();
+      expect(llmRuntime.getEffectiveLlmSettings()).toMatchObject({
+        llmApiKey: 'runtime-secret-before',
+        llmModel: 'runtime-model-before',
+        llmBaseUrl: 'https://before.example.com/v1',
+      });
+      expect(config.config.llmModel).toBe('runtime-model-before');
+
+      fs.writeFileSync(settingsPath, JSON.stringify({
+        llm: {
+          apiKey: 'runtime-secret-after-hot-reload',
+          model: 'runtime-model-after-hot-reload',
+          baseUrl: 'https://after-hot-reload.example.com/v1',
+        },
+      }));
+
+      expect(llmRuntime.getEffectiveLlmSettings()).toMatchObject({
+        llmApiKey: 'runtime-secret-after-hot-reload',
+        llmModel: 'runtime-model-after-hot-reload',
+        llmBaseUrl: 'https://after-hot-reload.example.com/v1',
+      });
+      expect(config.config.llmModel).toBe('runtime-model-after-hot-reload');
+      expect(config.config.llmBaseUrl).toBe('https://after-hot-reload.example.com/v1');
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test('hot-reloads same-size settings.json rewrites with unchanged mtime', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'structureclaw-llm-settings-'));
+    const previous = {
+      SCLAW_DATA_DIR: process.env.SCLAW_DATA_DIR,
+      LLM_MODEL: process.env.LLM_MODEL,
+      LLM_BASE_URL: process.env.LLM_BASE_URL,
+    };
+
+    delete process.env.LLM_MODEL;
+    delete process.env.LLM_BASE_URL;
+    process.env.SCLAW_DATA_DIR = tempDir;
+
+    const settingsPath = path.join(tempDir, 'settings.json');
+    const fixedTime = new Date('2026-01-01T00:00:00.000Z');
+    const beforeRaw = JSON.stringify({
+      llm: {
+        apiKey: 'runtime-secret-aa',
+        model: 'same-size-model-a',
+        baseUrl: 'https://a.example.com/v1',
+      },
+    });
+    const afterRaw = JSON.stringify({
+      llm: {
+        apiKey: 'runtime-secret-bb',
+        model: 'same-size-model-b',
+        baseUrl: 'https://b.example.com/v1',
+      },
+    });
+    expect(Buffer.byteLength(afterRaw)).toBe(Buffer.byteLength(beforeRaw));
+
+    fs.writeFileSync(settingsPath, beforeRaw);
+    fs.utimesSync(settingsPath, fixedTime, fixedTime);
+
+    try {
+      const { llmRuntime } = await getModules();
+      expect(llmRuntime.getEffectiveLlmSettings()).toMatchObject({
+        llmApiKey: 'runtime-secret-aa',
+        llmModel: 'same-size-model-a',
+        llmBaseUrl: 'https://a.example.com/v1',
+      });
+
+      fs.writeFileSync(settingsPath, afterRaw);
+      fs.utimesSync(settingsPath, fixedTime, fixedTime);
+
+      expect(llmRuntime.getEffectiveLlmSettings()).toMatchObject({
+        llmApiKey: 'runtime-secret-bb',
+        llmModel: 'same-size-model-b',
+        llmBaseUrl: 'https://b.example.com/v1',
+      });
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test('hot-reloads python worker execution settings without restart', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'structureclaw-runtime-settings-'));
+    const previous = {
+      SCLAW_DATA_DIR: process.env.SCLAW_DATA_DIR,
+    };
+
+    process.env.SCLAW_DATA_DIR = tempDir;
+
+    const settingsPath = path.join(tempDir, 'settings.json');
+    fs.writeFileSync(settingsPath, JSON.stringify({
+      analysis: {
+        pythonBin: 'python-before',
+        pythonTimeoutMs: 111,
+      },
+      agent: {
+        allowShell: true,
+        allowedShellCommands: 'node',
+      },
+      pkpm: {
+        cyclePath: 'C:/PKPM/JWSCYCLE.exe',
+        workDir: 'C:/structureclaw/pkpm-before',
+      },
+      yjk: {
+        installRoot: 'C:/YJKS/YJKS_8_0_0',
+        timeoutS: 11,
+        invisible: true,
+      },
+    }));
+
+    try {
+      const { settingsFile, config } = await getModules();
+      expect(config.config.analysisPythonBin).toBe('python-before');
+      expect(config.config.analysisPythonTimeoutMs).toBe(111);
+      expect(config.config.agentAllowShell).toBe(true);
+      expect(config.config.agentAllowedShells).toBe('node');
+      expect(config.config.pkpmCyclePath).toBe('C:/PKPM/JWSCYCLE.exe');
+      expect(config.config.pkpmWorkDir).toBe('C:/structureclaw/pkpm-before');
+      expect(config.config.yjkInstallRoot).toBe('C:/YJKS/YJKS_8_0_0');
+      expect(config.config.yjkTimeoutS).toBe(11);
+      expect(config.config.yjkInvisible).toBe(true);
+
+      settingsFile.writeSettingsFile({
+        analysis: {
+          pythonBin: 'python-after',
+          pythonTimeoutMs: 222,
+        },
+        agent: {
+          allowShell: false,
+          allowedShellCommands: 'npm',
+        },
+        pkpm: {
+          cyclePath: '',
+          workDir: 'C:/structureclaw/pkpm-after',
+        },
+        yjk: {
+          installRoot: '',
+          timeoutS: 22,
+          invisible: false,
+        },
+      });
+
+      expect(config.config.analysisPythonBin).toBe('python-after');
+      expect(config.config.analysisPythonTimeoutMs).toBe(222);
+      expect(config.config.agentAllowShell).toBe(false);
+      expect(config.config.agentAllowedShells).toBe('npm');
+      expect(config.config.pkpmCyclePath).toBe('');
+      expect(config.config.pkpmWorkDir).toBe('C:/structureclaw/pkpm-after');
+      expect(config.config.yjkInstallRoot).toBe('');
+      expect(config.config.yjkTimeoutS).toBe(22);
+      expect(config.config.yjkInvisible).toBe(false);
+
+      const stored = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      expect(stored.pkpm).not.toHaveProperty('cyclePath');
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test('keeps the previous runtime api key when apiKeyMode is keep', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'structureclaw-llm-settings-'));
     const previous = {
