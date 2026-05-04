@@ -115,6 +115,39 @@ function normalizeAnalysisErrorCode(...values: unknown[]): string {
   return 'ANALYSIS_EXECUTION_FAILED';
 }
 
+function optionalRecord(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
+function countRecordEntries(value: unknown): number | undefined {
+  return isRecord(value) ? Object.keys(value).length : undefined;
+}
+
+function firstDefined<T>(...values: Array<T | undefined>): T | undefined {
+  return values.find((value) => value !== undefined);
+}
+
+function pickNumberLike(record: Record<string, unknown>, key: string): number | string | null | undefined {
+  const value = record[key];
+  if (value === null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+  return undefined;
+}
+
+function pickStringLike(record: Record<string, unknown>, key: string): string | null | undefined {
+  const value = record[key];
+  if (value === null) return null;
+  if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return undefined;
+}
+
+function omitEmptyRecord(record: Record<string, unknown>): Record<string, unknown> | undefined {
+  const entries = Object.entries(record).filter(([, value]) => value !== undefined);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
 function pickAnalysisDiagnostics(
   result: Record<string, unknown>,
   meta: Record<string, unknown>,
@@ -147,13 +180,82 @@ function pickAnalysisDiagnostics(
   return Object.keys(diagnostics).length > 0 ? diagnostics : undefined;
 }
 
+function buildSuccessfulAnalysisDetails(data: Record<string, unknown>, result: Record<string, unknown>) {
+  const summary = optionalRecord(data.summary);
+  const envelope = optionalRecord(data.envelope);
+  const caseResults = optionalRecord(data.caseResults);
+  const loadCases = optionalRecord(data.loadCases);
+  const combinations = optionalRecord(data.combinations);
+
+  const counts = omitEmptyRecord({
+    nodeCount: firstDefined(
+      summary ? pickNumberLike(summary, 'nodeCount') : undefined,
+      countRecordEntries(data.displacements),
+    ),
+    elementCount: firstDefined(
+      summary ? pickNumberLike(summary, 'elementCount') : undefined,
+      countRecordEntries(data.forces),
+    ),
+    reactionNodeCount: firstDefined(
+      summary ? pickNumberLike(summary, 'reactionNodeCount') : undefined,
+      countRecordEntries(data.reactions),
+    ),
+    loadCaseCount: firstDefined(
+      summary ? pickNumberLike(summary, 'loadCaseCount') : undefined,
+      countRecordEntries(caseResults),
+      countRecordEntries(loadCases),
+    ),
+    combinationCount: firstDefined(
+      summary ? pickNumberLike(summary, 'combinationCount') : undefined,
+      countRecordEntries(combinations),
+    ),
+  });
+
+  const keyMetrics = envelope ? omitEmptyRecord({
+    maxAbsDisplacement: pickNumberLike(envelope, 'maxAbsDisplacement'),
+    maxAbsAxialForce: pickNumberLike(envelope, 'maxAbsAxialForce'),
+    maxAbsShearForce: pickNumberLike(envelope, 'maxAbsShearForce'),
+    maxAbsMoment: pickNumberLike(envelope, 'maxAbsMoment'),
+    maxAbsReaction: pickNumberLike(envelope, 'maxAbsReaction'),
+  }) : undefined;
+
+  const controlling = envelope ? omitEmptyRecord({
+    controlNodeDisplacement: pickStringLike(envelope, 'controlNodeDisplacement'),
+    controlElementAxialForce: pickStringLike(envelope, 'controlElementAxialForce'),
+    controlElementShearForce: pickStringLike(envelope, 'controlElementShearForce'),
+    controlElementMoment: pickStringLike(envelope, 'controlElementMoment'),
+    controlNodeReaction: pickStringLike(envelope, 'controlNodeReaction'),
+  }) : undefined;
+
+  const rawWarnings = Array.isArray(data.warnings)
+    ? data.warnings
+    : Array.isArray(result.warnings)
+      ? result.warnings
+      : [];
+  const warnings = rawWarnings
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .slice(0, 5)
+    .map((value) => compactText(value, 500) ?? value);
+
+  return omitEmptyRecord({
+    counts,
+    keyMetrics,
+    controlling,
+    warnings: warnings.length > 0 ? warnings : undefined,
+  });
+}
+
+function getAnalysisPayload(result: Record<string, unknown>): Record<string, unknown> {
+  return isRecord(result.data) ? result.data : result;
+}
+
 export function buildAnalysisToolSummary(args: {
   result: unknown;
   skillId?: string;
 }): Record<string, unknown> {
   const result = isRecord(args.result) ? args.result : {};
   const meta = isRecord(result.meta) ? result.meta : {};
-  const data = isRecord(result.data) ? result.data : undefined;
+  const data = getAnalysisPayload(result);
   const status = typeof result.status === 'string' ? result.status : undefined;
   const success = result.success !== false && status !== 'error';
 
@@ -173,7 +275,52 @@ export function buildAnalysisToolSummary(args: {
     success: true,
     skillId: args.skillId,
     analysisMode: data?.analysisMode,
+    ...(buildSuccessfulAnalysisDetails(data, result) ?? {}),
   };
+}
+
+export function buildModelToolSummary(
+  model: Record<string, unknown>,
+  locale: 'zh' | 'en' = 'zh',
+): Record<string, unknown> {
+  const nodeCount = Array.isArray(model.nodes) ? model.nodes.length : 0;
+  const elementCount = Array.isArray(model.elements) ? model.elements.length : 0;
+  const schemaVersion = model.schema_version;
+
+  if (nodeCount === 0 || elementCount === 0) {
+    return {
+      success: false,
+      errorCode: 'EMPTY_MODEL',
+      message: locale === 'zh'
+        ? '模型构建结果为空，未生成可分析的节点或单元。请重新提取参数或补充结构连接信息。'
+        : 'Model build returned an empty model with no analyzable nodes or elements. Re-extract parameters or provide structural connectivity.',
+      nodeCount,
+      elementCount,
+      schemaVersion,
+    };
+  }
+
+  return {
+    success: true,
+    nodeCount,
+    elementCount,
+    schemaVersion,
+  };
+}
+
+export function buildModelToolStateUpdate(
+  model: Record<string, unknown>,
+  summary: Record<string, unknown>,
+): Partial<AgentState> {
+  if (summary.success === false) {
+    return {
+      model: null,
+      analysisResult: null,
+      codeCheckResult: null,
+      report: null,
+    };
+  }
+  return { model };
 }
 
 // ---------------------------------------------------------------------------
@@ -394,14 +541,14 @@ export function createBuildModelTool(skillRuntime: AgentSkillRuntime) {
       // Store model in graph state via Command.
       // Keep ToolMessage content compact — full model lives in graph state.
       // The streaming layer reads model from nodeState for artifact_payload_sync.
-      const nodeCount = Array.isArray(model.nodes) ? model.nodes.length : 0;
-      const elementCount = Array.isArray(model.elements) ? model.elements.length : 0;
-      logToolCall(log, { tool: 'build_model', durationMs: Date.now() - start, extra: { success: true, nodeCount, elementCount, schemaVersion: model.schema_version } });
+      const summary = buildModelToolSummary(model, state?.locale || 'zh');
+      const success = summary.success !== false;
+      logToolCall(log, { tool: 'build_model', durationMs: Date.now() - start, success, extra: summary });
       return toolResult(
         toolCallId,
         'build_model',
-        JSON.stringify({ success: true, nodeCount, elementCount, schemaVersion: model.schema_version }),
-        { model },
+        JSON.stringify(summary),
+        buildModelToolStateUpdate(model, summary),
       );
     },
     {
