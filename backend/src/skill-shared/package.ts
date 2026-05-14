@@ -6,9 +6,7 @@ import type {
 } from '../agent-runtime/types.js';
 import type { SkillProviderSource } from './provider.js';
 
-export const BUILTIN_SKILL_PACKAGE_VERSION = '0.0.0-builtin';
-
-export interface SkillPackageEntrypoints {
+interface SkillPackageEntrypoints {
   [key: string]: string | undefined;
 }
 
