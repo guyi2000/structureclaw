@@ -518,7 +518,7 @@ function groupMessagesForRendering(messages: Message[]): MessageRenderGroup[] {
       return
     }
 
-    if (message.role === 'assistant' && message.presentation?.mode === 'execution') {
+    if (message.role === 'assistant' && (message.presentation?.mode === 'execution')) {
       groups.push({ type: 'assistant-execution', assistant: message, tools: [] })
       return
     }
@@ -2770,7 +2770,22 @@ export function AIConsole() {
 
       const payload = await response.json() as ConversationDetail | null
       const backendMessages = Array.isArray(payload?.messages)
-        ? payload.messages.flatMap((message): Message[] => {
+        ? (() => {
+            // Build a toolCallId → args index from assistant messages so
+            // tool-role messages can recover their input parameters.
+            const argsByToolCallId = new Map<string, Record<string, unknown>>()
+            for (const msg of payload.messages) {
+              if (msg.role === 'assistant') {
+                const toolCalls = (msg as any).toolCalls as Array<{ id?: string; name: string; args?: Record<string, unknown> }> | undefined
+                if (Array.isArray(toolCalls)) {
+                  for (const tc of toolCalls) {
+                    if (tc.id && tc.args) argsByToolCallId.set(tc.id, tc.args)
+                  }
+                }
+              }
+            }
+
+            const mapped = payload.messages.flatMap((message): Message[] => {
             // Handle tool messages — these come from persistFullConversationMessages
             if (message.role === 'tool') {
               let restoredSkillId: string | undefined
@@ -2778,6 +2793,7 @@ export function AIConsole() {
                 const parsed = JSON.parse(message.content)
                 if (typeof parsed?.skillId === 'string') restoredSkillId = parsed.skillId
               } catch {}
+              const toolCallId = (message as any).toolCallId || message.id
               return [{
                 id: message.id,
                 role: 'tool' as const,
@@ -2785,20 +2801,23 @@ export function AIConsole() {
                 status: 'done' as const,
                 timestamp: message.createdAt,
                 toolStep: {
-                  id: (message as any).toolCallId || message.id,
+                  id: toolCallId,
                   phase: mapToolNameToPhase((message as any).name || 'unknown'),
                   status: 'done' as const,
                   tool: (message as any).name || 'unknown',
                   title: (message as any).name || 'unknown',
                   skillId: restoredSkillId,
+                  args: argsByToolCallId.get(toolCallId),
                   output: message.content,
                   completedAt: message.createdAt,
                 },
               }]
             }
-            // Handle assistant messages with toolCalls metadata
+            // Handle assistant messages
             if (message.role === 'assistant') {
               const toolCalls = (message as any).toolCalls as Array<{ id?: string; name: string; args?: Record<string, unknown> }> | undefined
+              const hasToolCalls = Array.isArray(toolCalls) && toolCalls.length > 0
+              const presentation = parsePersistedPresentation(message.metadata)
               const mapped: Message = {
                 id: message.id,
                 role: 'assistant' as const,
@@ -2806,14 +2825,8 @@ export function AIConsole() {
                 status: parsePersistedMessageStatus(message.metadata, message.content),
                 timestamp: message.createdAt,
                 debugDetails: parsePersistedDebugDetails(message.metadata),
-                presentation: parsePersistedPresentation(message.metadata),
-              }
-              // Store toolCalls on the assistant message so ToolCallCard can
-              // render the expandable args section.  Do NOT emit separate
-              // "running" step messages — the DB already has tool-role
-              // messages that carry the completion status.
-              if (Array.isArray(toolCalls) && toolCalls.length > 0) {
-                mapped.toolCalls = toolCalls
+                presentation,
+                ...(hasToolCalls ? { toolCalls } : {}),
               }
               return [mapped]
             }
@@ -2829,6 +2842,39 @@ export function AIConsole() {
               attachments: parsePersistedAttachments(message.metadata),
             }]
           })
+
+            // Reorder: DB createdAt puts the final assistant (written first by
+            // persistConversationMessages) before intermediate messages (written
+            // later by persistFullConversationMessages). We restore semantic order:
+            //   user → intermediate AI reasoning + interleaved tool cards → final assistant
+            const users = mapped.filter(m => m.role === 'user')
+            const intermediates = mapped.filter(m =>
+              m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0 && !m.presentation,
+            )
+            const tools = mapped.filter(m => m.role === 'tool')
+            const finals = mapped.filter(m =>
+              m.role === 'assistant' && !(Array.isArray(m.toolCalls) && m.toolCalls.length > 0 && !m.presentation),
+            )
+
+            const ordered: Message[] = [...users]
+            const usedToolIds = new Set<string>()
+            for (const ai of intermediates) {
+              ordered.push(ai)
+              for (const tc of (ai.toolCalls || [])) {
+                if (!tc.id) continue
+                const match = tools.find(t => t.toolStep?.id === tc.id)
+                if (match && !usedToolIds.has(match.id)) {
+                  ordered.push(match)
+                  usedToolIds.add(match.id)
+                }
+              }
+            }
+            for (const tool of tools) {
+              if (!usedToolIds.has(tool.id)) ordered.push(tool)
+            }
+            ordered.push(...finals)
+            return ordered
+          })()
         : []
       const archivedMessages = archived?.messages || []
       const archiveHasOnlyWelcome =

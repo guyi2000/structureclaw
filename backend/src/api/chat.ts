@@ -342,10 +342,18 @@ async function persistConversationMessages(params: {
 }
 
 /**
- * Persist intermediate LangGraph tool messages into the DB. The user/final
- * assistant pair is already written by persistConversationMessages with the
- * presentation metadata the UI needs; appending final AI messages from the
- * graph state would restore the same assistant turn twice.
+ * Persist intermediate LangGraph messages (tool outputs + AI tool_calls)
+ * into the DB for conversation restore.
+ *
+ * We store:
+ *  - `role: 'tool'` messages: tool outputs with name and tool_call_id
+ *  - `role: 'assistant'` messages that carry `tool_calls[]`: these record
+ *    the LLM's decision to invoke tools including the input args, which
+ *    the UI needs to render expandable tool-call cards on history restore.
+ *
+ * The final assistant summary is already written by
+ * `persistConversationMessages` with the presentation metadata — we skip
+ * AI messages that have no tool_calls to avoid duplicating that record.
  */
 async function persistFullConversationMessages(params: {
   conversationId: string;
@@ -355,13 +363,34 @@ async function persistFullConversationMessages(params: {
   if (!conversationId || !Array.isArray(state.messages)) return;
 
   try {
-    const existingToolCount = await prisma.message.count({
-      where: { conversationId, role: 'tool' },
+    // Fetch existing tool_call_ids and assistant toolCalls to deduplicate
+    // against. This avoids relying on positional counts which break when
+    // persistConversationMessages has already written user/assistant rows.
+    const existingToolMessages = await prisma.message.findMany({
+      where: { conversationId, role: 'tool', toolCallId: { not: null } },
+      select: { toolCallId: true },
     });
+    const existingToolCallIds = new Set(
+      existingToolMessages.map((m: { toolCallId: string | null }) => m.toolCallId).filter(Boolean),
+    );
+    const existingAssistantWithToolCalls = await prisma.message.findMany({
+      where: { conversationId, role: 'assistant' },
+      select: { toolCalls: true },
+    });
+    const existingToolCallIdsOnAssistant = new Set<string>();
+    for (const row of existingAssistantWithToolCalls) {
+      const tcs = Array.isArray(row.toolCalls) ? row.toolCalls : [];
+      for (const tc of tcs) {
+        const tcRecord = tc as Record<string, unknown>;
+        if (typeof tcRecord.id === 'string') existingToolCallIdsOnAssistant.add(tcRecord.id);
+      }
+    }
 
     const allMessages: BaseMessage[] = state.messages;
-    const toolRecords = allMessages.map((msg): Record<string, unknown> | null => {
-      if (msg == null || typeof msg !== 'object') return null;
+    const records: Record<string, unknown>[] = [];
+
+    for (const msg of allMessages) {
+      if (msg == null || typeof msg !== 'object') continue;
 
       const getType = typeof (msg as any)._getType === 'function' ? (msg as any)._getType() : null;
       const content = typeof msg.content === 'string'
@@ -375,19 +404,35 @@ async function persistFullConversationMessages(params: {
           : JSON.stringify(msg.content);
 
       if (getType === 'tool') {
-        return {
+        const toolCallId = (msg as any).tool_call_id || undefined;
+        // Skip if this tool output was already persisted
+        if (toolCallId && existingToolCallIds.has(toolCallId)) continue;
+        records.push({
           conversationId,
           role: 'tool',
           content: typeof content === 'string' ? content : JSON.stringify(content),
           name: (msg as any).name || undefined,
-          toolCallId: (msg as any).tool_call_id || undefined,
-        };
+          toolCallId,
+        });
+      } else if (getType === 'ai') {
+        const toolCalls = Array.isArray((msg as any).tool_calls) ? (msg as any).tool_calls : [];
+        if (toolCalls.length === 0) continue;
+        // Skip if ALL tool_call ids from this AIMessage already exist in DB
+        const tcIds = toolCalls.map((tc: any) => tc.id ?? '');
+        if (tcIds.length > 0 && tcIds.every((id: string) => existingToolCallIdsOnAssistant.has(id))) continue;
+        records.push({
+          conversationId,
+          role: 'assistant',
+          content: typeof content === 'string' ? content : JSON.stringify(content),
+          toolCalls: toolCalls.map((tc: any) => ({
+            id: tc.id ?? '',
+            name: tc.name ?? '',
+            args: tc.args ?? {},
+          })),
+        });
       }
-      // Skip system messages and unknown types
-      return null;
-    }).filter((r): r is Record<string, unknown> => r !== null);
+    }
 
-    const records = toolRecords.slice(existingToolCount);
     if (records.length > 0) {
       await prisma.message.createMany({ data: records as any });
     }
@@ -870,8 +915,9 @@ export async function chatRoutes(fastify: FastifyInstance) {
       await persistStreamMessages(wasAborted);
 
       // Persist full LangGraph message history (including tool calls) for
-      // conversation restore. Best-effort — don't block the response.
-      if (!wasAborted && streamConversationId) {
+      // conversation restore. Must run even on abort — tool messages are
+      // critical for history reconstruction. Best-effort on snapshot retrieval.
+      if (streamConversationId) {
         try {
           const snapshot = await agentService.getConversationSessionSnapshot(
             streamConversationId,
