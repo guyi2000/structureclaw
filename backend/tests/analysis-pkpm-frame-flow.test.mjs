@@ -128,6 +128,8 @@ function writePkpmApiStub(stubsDir) {
       'class ProjectPara:',
       '    def SetParaInt(self, key, value):',
       '        calls.append({"method": "ProjectPara.SetParaInt", "key": key, "value": value})',
+      '    def SetParaDouble(self, key, value):',
+      '        calls.append({"method": "ProjectPara.SetParaDouble", "key": key, "value": value})',
       '',
       'class Node:',
       '    def __init__(self, node_id): self.node_id = node_id',
@@ -184,7 +186,7 @@ function writePkpmApiStub(stubsDir) {
       '    def SetStandFloorIndex(self, index): calls.append({"method": "RealFloor.SetStandFloorIndex", "index": index})',
       '',
       'class Model:',
-      '    def __init__(self): self.floor = StandFloor(); self.next_col_sec = 1; self.next_beam_sec = 1; self.para = ProjectPara()',
+      '    def __init__(self): self.floor = StandFloor(); self.next_col_sec = 1; self.next_beam_sec = 1; self.para = ProjectPara(); self.design_params = [0.0] * 128',
       '    def CreatNewModel(self, work_dir, project_name): calls.append({"method": "Model.CreatNewModel", "work_dir": work_dir, "project_name": project_name})',
       '    def OpenPMModel(self, jws_path): calls.append({"method": "Model.OpenPMModel", "jws_path": jws_path})',
       '    def AddColumnSection(self, section):',
@@ -201,6 +203,13 @@ function writePkpmApiStub(stubsDir) {
       '    def GetCurrentStandFloor(self): return self.floor',
       '    def AddNaturalFloor(self, floor): calls.append({"method": "Model.AddNaturalFloor"})',
       '    def GetProjectPara(self): return self.para',
+      '    def GetAllDesignPara(self):',
+      '        calls.append({"method": "Model.GetAllDesignPara"})',
+      '        return list(self.design_params)',
+      '    def SetAllDesignPara(self, values):',
+      '        self.design_params = list(values)',
+      '        calls.append({"method": "Model.SetAllDesignPara", "values": list(values)})',
+      '    def SetOneDesignParaValue(self, index, value): calls.append({"method": "Model.SetOneDesignParaValue", "index": index, "value": value})',
       '    def SaveProjectPara(self): calls.append({"method": "Model.SaveProjectPara"})',
       '    def SavePMModel(self): calls.append({"method": "Model.SavePMModel"})',
     ].join('\n'),
@@ -503,6 +512,130 @@ describe('PKPM frame analysis flow', () => {
     expect(findCalls(payload, 'Column.SetConcreteGrade').map((call) => call.grade)).toEqual(expect.arrayContaining(['C35']));
     expect(findCalls(payload, 'Beam.SetConcreteGrade').map((call) => call.grade)).toEqual(expect.arrayContaining(['C35']));
     expect(findCalls(payload, 'Beam.SetSteelGrade')).toHaveLength(0);
+  });
+
+  test('passes V2 seismic and wind design conditions into PKPM design parameters', () => {
+    const model = buildRcUserScenarioModel();
+    model.site_seismic = {
+      intensity: 7,
+      design_group: '第三组',
+      site_category: 'III',
+      characteristic_period: 0.65,
+      max_influence_coefficient: 0.08,
+      damping_ratio: 0.05,
+    };
+    model.wind = {
+      basic_pressure: 0.4,
+      terrain_roughness: 'B',
+      shape_factor: 1.3,
+    };
+    model.analysis_control = {
+      p_delta: false,
+      rigid_floor: true,
+      consideration_torsion: true,
+    };
+
+    const payload = runPkpmRuntime(model);
+    const designParams = findCalls(payload, 'Model.SetAllDesignPara').at(-1).values;
+
+    expect(designParams[24]).toBe(3);
+    expect(designParams[25]).toBe(7);
+    expect(designParams[26]).toBe(3);
+    expect(designParams[33]).toBe(0.4);
+    expect(designParams[34]).toBe(2);
+    expect(designParams[35]).toBe(1);
+    expect(designParams[37]).toBe(1.3);
+    expect(findCalls(payload, 'ProjectPara.SetParaDouble')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 202, value: 0.4 }),
+      expect.objectContaining({ key: 312, value: 0.65 }),
+      expect.objectContaining({ key: 313, value: 0.08 }),
+    ]));
+    expect(findCalls(payload, 'ProjectPara.SetParaInt')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 301, value: 2 }),
+      expect.objectContaining({ key: 303, value: 3 }),
+      expect.objectContaining({ key: 201, value: 2 }),
+    ]));
+    expect(payload.result.summary.designConditions).toMatchObject({
+      site_seismic: {
+        intensity: 7,
+        design_group: '第三组',
+        site_category: 'III',
+      },
+      wind: {
+        basic_pressure: 0.4,
+        terrain_roughness: 'B',
+      },
+    });
+    expect(payload.result.pkpm_detailed.input_design_conditions.wind).toMatchObject({
+      basic_pressure: 0.4,
+    });
+  });
+
+  test('parses WMASS damping as ratio and percent separately', () => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sclaw-pkpm-wmass-'));
+    try {
+      writeFile(path.join(workDir, 'WMASS.OUT'), [
+        'WO = 0.40',
+        'NAF = 7.00',
+        'NMODE = 6',
+        'DAMP = 5.00',
+      ].join('\n'));
+      const script = [
+        'import json, sys, types',
+        'from pathlib import Path',
+        'contracts = types.ModuleType("contracts")',
+        'class EngineNotAvailableError(RuntimeError): pass',
+        'contracts.EngineNotAvailableError = EngineNotAvailableError',
+        'sys.modules["contracts"] = contracts',
+        'from runtime import _read_wmass_design_params',
+        'print(json.dumps(_read_wmass_design_params(Path(sys.argv[1])), ensure_ascii=False))',
+      ].join('\n');
+      const result = spawnSync(
+        pythonCommand.executable,
+        [...pythonCommand.args, '-c', script, workDir],
+        {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            PYTHONPATH: [runtimeSupportDir, pkpmDir, process.env.PYTHONPATH]
+              .filter(Boolean)
+              .join(path.delimiter),
+          },
+          windowsHide: process.platform === 'win32',
+        },
+      );
+
+      if (result.status !== 0) {
+        throw new Error(`WMASS parser probe failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+      }
+      const parsed = JSON.parse(result.stdout.trim());
+      expect(parsed.damping_ratio).toBeCloseTo(0.05);
+      expect(parsed.damping_ratio_percent).toBeCloseTo(5);
+    } finally {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  test('ignores malformed PKPM design-condition containers', () => {
+    const model = buildRcUserScenarioModel();
+    model.site_seismic = 'not-a-map';
+    model.wind = ['not-a-map'];
+    model.analysis_control = {
+      design_params: {
+        pkpm: {
+          satwe_indices: ['not-a-map'],
+        },
+      },
+    };
+
+    const payload = runPkpmRuntime(model);
+
+    expect(payload.result.status).toBe('success');
+    expect(findCalls(payload, 'Model.SetAllDesignPara')).toHaveLength(0);
+    expect(payload.result.pkpm_detailed.input_design_conditions).toMatchObject({
+      site_seismic: {},
+      wind: {},
+    });
   });
 
   test('accepts generic rectangular section properties for PKPM concrete sections', () => {

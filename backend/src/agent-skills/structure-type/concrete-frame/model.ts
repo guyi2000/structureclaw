@@ -2,7 +2,18 @@ import {
   STRUCTURAL_COORDINATE_SEMANTICS,
 } from '../../../agent-runtime/coordinate-semantics.js';
 import { buildElementReferenceVectors } from '../../../agent-runtime/reference-vectors.js';
-import type { DraftState } from '../../../agent-runtime/types.js';
+import type {
+  DraftAnalysisControl,
+  DraftSiteSeismicParams,
+  DraftState,
+  DraftWindParams,
+} from '../../../agent-runtime/types.js';
+import {
+  normalizeSeismicDesignGroup,
+  normalizeSeismicSiteCategory,
+  normalizeWindTerrainRoughness,
+  seismicDesignGroupIndex,
+} from './design-conditions.js';
 
 interface ConcreteMaterial {
   grade: string;   // 如 "C30"
@@ -317,6 +328,9 @@ type ConcreteFrameModel = {
   unit_system: 'SI';
   project: Record<string, unknown>;
   structure_system: Record<string, unknown>;
+  site_seismic?: Record<string, unknown>;
+  wind?: Record<string, unknown>;
+  analysis_control?: Record<string, unknown>;
   nodes: Array<Record<string, unknown>>;
   elements: Array<Record<string, unknown>>;
   stories: Array<Record<string, unknown>>;
@@ -373,6 +387,81 @@ type ConcreteFrameModel = {
   }>;
 };
 
+function deriveCharacteristicPeriod(designGroup: string | undefined, siteCategory: string | undefined): number | undefined {
+  const group = seismicDesignGroupIndex(designGroup);
+  const category = normalizeSeismicSiteCategory(siteCategory);
+  if (!group || !category) return undefined;
+  const table: Record<1 | 2 | 3, Record<string, number>> = {
+    1: { I: 0.25, II: 0.35, III: 0.45, IV: 0.65 },
+    2: { I: 0.30, II: 0.40, III: 0.55, IV: 0.75 },
+    3: { I: 0.35, II: 0.45, III: 0.65, IV: 0.90 },
+  };
+  return table[group][category];
+}
+
+function deriveMaxInfluenceCoefficient(accelerationG: number | undefined): number | undefined {
+  if (accelerationG === undefined) return undefined;
+  const known = [
+    { accelerationG: 0.05, alphaMax: 0.04 },
+    { accelerationG: 0.10, alphaMax: 0.08 },
+    { accelerationG: 0.15, alphaMax: 0.12 },
+    { accelerationG: 0.20, alphaMax: 0.16 },
+    { accelerationG: 0.30, alphaMax: 0.24 },
+    { accelerationG: 0.40, alphaMax: 0.32 },
+  ];
+  const matched = known.find((item) => Math.abs(item.accelerationG - accelerationG) < 0.001);
+  return matched?.alphaMax;
+}
+
+function buildSiteSeismicRecord(input: DraftSiteSeismicParams | undefined): Record<string, unknown> | undefined {
+  if (!input || Object.keys(input).length === 0) return undefined;
+  const designGroup = normalizeSeismicDesignGroup(input.designGroup);
+  const siteCategory = normalizeSeismicSiteCategory(input.siteCategory);
+  const characteristicPeriod = input.characteristicPeriod
+    ?? deriveCharacteristicPeriod(designGroup, siteCategory);
+  const maxInfluenceCoefficient = input.maxInfluenceCoefficient
+    ?? deriveMaxInfluenceCoefficient(input.accelerationG);
+  return {
+    ...(input.intensity !== undefined && { intensity: input.intensity }),
+    ...(designGroup !== undefined && { design_group: designGroup }),
+    ...(siteCategory !== undefined && { site_category: siteCategory }),
+    ...(characteristicPeriod !== undefined && { characteristic_period: characteristicPeriod }),
+    ...(maxInfluenceCoefficient !== undefined && { max_influence_coefficient: maxInfluenceCoefficient }),
+    damping_ratio: input.dampingRatio ?? 0.05,
+    extra: {
+      ...(input.accelerationG !== undefined && { acceleration_g: input.accelerationG }),
+    },
+  };
+}
+
+function buildWindRecord(input: DraftWindParams | undefined): Record<string, unknown> | undefined {
+  if (!input || Object.keys(input).length === 0) return undefined;
+  const terrainRoughness = normalizeWindTerrainRoughness(input.terrainRoughness);
+  return {
+    ...(input.basicPressureKNM2 !== undefined && { basic_pressure: input.basicPressureKNM2 }),
+    ...(terrainRoughness !== undefined && { terrain_roughness: terrainRoughness }),
+    ...(input.shapeFactor !== undefined && { shape_factor: input.shapeFactor }),
+    ...(input.heightVariationFactor !== undefined && { height_variation_factor: input.heightVariationFactor }),
+  };
+}
+
+function buildAnalysisControlRecord(input: DraftAnalysisControl | undefined): Record<string, unknown> | undefined {
+  const base: Record<string, unknown> = {
+    p_delta: input?.pDelta ?? false,
+    rigid_floor: input?.rigidFloor ?? true,
+    consideration_torsion: input?.considerationTorsion ?? true,
+  };
+  if (input?.periodReductionFactor !== undefined) base.period_reduction_factor = input.periodReductionFactor;
+  if (input?.accidentalEccentricity !== undefined) base.accidental_eccentricity = input.accidentalEccentricity;
+  if (input?.modalCount !== undefined) base.modal_count = input.modalCount;
+  if (input?.basementCount !== undefined) base.basement_count = input.basementCount;
+  if (input?.liveLoadReduction !== undefined) base.live_load_reduction = input.liveLoadReduction;
+  if (input?.structureImportanceFactor !== undefined) base.structure_importance_factor = input.structureImportanceFactor;
+  if (input?.dampingRatioWind !== undefined) base.damping_ratio_wind = input.dampingRatioWind;
+  if (input?.designParams !== undefined) base.design_params = input.designParams;
+  return Object.keys(base).length ? base : undefined;
+}
+
 function accumulateCoords(lengths: number[]): number[] {
   const coords = [0];
   for (const value of lengths) {
@@ -425,6 +514,7 @@ function storyHasFloorLoad(story: Record<string, unknown>, loadType: 'dead' | 'l
 function buildConcreteLoadCaseBundle(
   stories: Array<Record<string, unknown>>,
   lateralLoads: Array<Record<string, unknown>>,
+  options: { includeWind?: boolean; includeSeismic?: boolean; frameDimension?: '2d' | '3d' } = {},
 ): { load_cases: Array<Record<string, unknown>>; load_combinations: Array<Record<string, unknown>> } {
   const loadCases: Array<Record<string, unknown>> = [];
 
@@ -436,6 +526,18 @@ function buildConcreteLoadCaseBundle(
   }
   if (lateralLoads.length) {
     loadCases.push({ id: 'LAT', type: 'other', loads: lateralLoads, description: 'Lateral story loads' });
+  }
+  if (options.includeWind) {
+    loadCases.push({ id: 'WX', type: 'wind', loads: [], description: 'X-direction wind load generated by commercial engine parameters' });
+    if (options.frameDimension === '3d') {
+      loadCases.push({ id: 'WY', type: 'wind', loads: [], description: 'Y-direction wind load generated by commercial engine parameters' });
+    }
+  }
+  if (options.includeSeismic) {
+    loadCases.push({ id: 'EX', type: 'seismic', loads: [], description: 'X-direction seismic action generated by commercial engine parameters' });
+    if (options.frameDimension === '3d') {
+      loadCases.push({ id: 'EY', type: 'seismic', loads: [], description: 'Y-direction seismic action generated by commercial engine parameters' });
+    }
   }
   if (!loadCases.length) {
     loadCases.push({ id: 'LC1', type: 'other', loads: [] });
@@ -505,8 +607,11 @@ function buildCommonModelFields(options: {
   rebarProps: RebarMaterialProps;
   columnProps: SectionProps;
   beamProps: SectionProps;
+  siteSeismic?: Record<string, unknown>;
+  wind?: Record<string, unknown>;
+  analysisControl?: Record<string, unknown>;
   metadata: Record<string, unknown>;
-}): Pick<ConcreteFrameModel, 'schema_version' | 'unit_system' | 'project' | 'structure_system' | 'materials' | 'sections' | 'metadata' | 'extensions'> {
+}): Pick<ConcreteFrameModel, 'schema_version' | 'unit_system' | 'project' | 'structure_system' | 'site_seismic' | 'wind' | 'analysis_control' | 'materials' | 'sections' | 'metadata' | 'extensions'> {
   return {
     schema_version: '2.0.0',
     unit_system: 'SI',
@@ -523,6 +628,9 @@ function buildCommonModelFields(options: {
         materialSystem: 'reinforced-concrete',
       },
     },
+    ...(options.siteSeismic !== undefined && { site_seismic: options.siteSeismic }),
+    ...(options.wind !== undefined && { wind: options.wind }),
+    ...(options.analysisControl !== undefined && { analysis_control: options.analysisControl }),
     materials: [
       buildConcreteMaterialRecord(options.concreteProps),
       buildRebarMaterialRecord(options.rebarProps),
@@ -545,8 +653,16 @@ function buildCommonModelFields(options: {
       columnSection: options.frameColumnSection,
       beamSection: options.frameBeamSection,
       storyCount: options.storyCount,
+      ...(options.siteSeismic !== undefined && { siteSeismic: options.siteSeismic }),
+      ...(options.wind !== undefined && { wind: options.wind }),
     },
     extensions: {
+      pkpm: {
+        materialSystem: 'reinforced-concrete',
+        designCode: 'GB50010',
+        ...(options.siteSeismic !== undefined && { site_seismic: options.siteSeismic }),
+        ...(options.wind !== undefined && { wind: options.wind }),
+      },
       yjk: {
         materialSystem: 'reinforced-concrete',
         designCode: 'GB50010',
@@ -574,6 +690,9 @@ function buildConcreteFrame2dLocalModel(options: {
   rebarProps: RebarMaterialProps;
   columnProps: SectionProps;
   beamProps: SectionProps;
+  siteSeismic?: Record<string, unknown>;
+  wind?: Record<string, unknown>;
+  analysisControl?: Record<string, unknown>;
 }): ConcreteFrameModel {
   const xCoords = accumulateCoords(options.bayWidthsM);
   const zCoords = accumulateCoords(options.storyHeightsM);
@@ -654,7 +773,11 @@ function buildConcreteFrame2dLocalModel(options: {
       ...buildStoryFloorLoadFields(deadLoad, liveLoad),
     };
   });
-  const loadCaseBundle = buildConcreteLoadCaseBundle(stories, lateralLoads);
+  const loadCaseBundle = buildConcreteLoadCaseBundle(stories, lateralLoads, {
+    includeWind: options.wind !== undefined,
+    includeSeismic: options.siteSeismic !== undefined,
+    frameDimension: '2d',
+  });
   const common = buildCommonModelFields({
     ...options,
     metadata: {
@@ -705,6 +828,9 @@ function buildConcreteFrame3dLocalModel(options: {
   rebarProps: RebarMaterialProps;
   columnProps: SectionProps;
   beamProps: SectionProps;
+  siteSeismic?: Record<string, unknown>;
+  wind?: Record<string, unknown>;
+  analysisControl?: Record<string, unknown>;
 }): ConcreteFrameModel {
   const xCoords = accumulateCoords(options.bayWidthsXM);
   const yCoords = accumulateCoords(options.bayWidthsYM);
@@ -815,7 +941,11 @@ function buildConcreteFrame3dLocalModel(options: {
       ...buildStoryFloorLoadFields(deadLoad, liveLoad),
     };
   });
-  const loadCaseBundle = buildConcreteLoadCaseBundle(stories, lateralLoads);
+  const loadCaseBundle = buildConcreteLoadCaseBundle(stories, lateralLoads, {
+    includeWind: options.wind !== undefined,
+    includeSeismic: options.siteSeismic !== undefined,
+    frameDimension: '3d',
+  });
   const common = buildCommonModelFields({
     ...options,
     metadata: {
@@ -895,6 +1025,11 @@ export function buildConcreteFrameModel(state: DraftState): ConcreteFrameModel |
   const rebarProps = resolveRebarMaterialProps(frameRebarGrade);
   const columnProps = resolveSectionProps(frameColumnSection, concreteProps.G);
   const beamProps = resolveSectionProps(frameBeamSection, concreteProps.G);
+  const siteSeismic = buildSiteSeismicRecord(state.siteSeismic as DraftSiteSeismicParams | undefined);
+  const wind = buildWindRecord(state.wind as DraftWindParams | undefined);
+  const analysisControl = siteSeismic || wind || state.analysisControl
+    ? buildAnalysisControlRecord(state.analysisControl as DraftAnalysisControl | undefined)
+    : undefined;
 
   if (frameDimension === '3d') {
     const bayWidthsXM = state.bayWidthsXM?.length ? state.bayWidthsXM : state.bayWidthsM;
@@ -926,6 +1061,9 @@ export function buildConcreteFrameModel(state: DraftState): ConcreteFrameModel |
       rebarProps,
       columnProps,
       beamProps,
+      siteSeismic,
+      wind,
+      analysisControl,
     });
   }
 
@@ -954,5 +1092,8 @@ export function buildConcreteFrameModel(state: DraftState): ConcreteFrameModel |
     rebarProps,
     columnProps,
     beamProps,
+    siteSeismic,
+    wind,
+    analysisControl,
   });
 }

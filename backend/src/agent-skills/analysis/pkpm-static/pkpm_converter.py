@@ -64,6 +64,10 @@ _STEEL_GRADE_RE = re.compile(r"^[SQ]\d{3}", re.IGNORECASE)
 _CONCRETE_GRADE_TOKEN_RE = re.compile(r"\bC\d{1,2}\b", re.IGNORECASE)
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _detect_material_family(data: dict) -> str:
     """Detect dominant material from model: 'steel' or 'concrete'."""
     metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
@@ -513,13 +517,30 @@ def _build_plan_nodes(
 def _configure_satwe_params(
     model: APIPyInterface.Model,
     material_family: str,
+    site_seismic: dict[str, Any] | None = None,
+    wind: dict[str, Any] | None = None,
+    analysis_control: dict[str, Any] | None = None,
 ) -> None:
-    """Set SATWE design parameters via ProjectPara (KIND field codes).
+    """Set PMCAD/SATWE design parameters through the official API.
 
-    KIND field codes (from PKPM结构数据字段说明):
-      101 = 结构体系: 10101=框架, 10113=钢框架-中心支撑, 10114=钢框架-偏心支撑, ...
-      102 = 结构所在地区: 10201=全国, 10202=广东, ...
-      103 = 结构材料: 10301=钢筋混凝土, 10302=钢砼混合, 10303=钢结构, 10304=砌体
+    `GetAllDesignPara` / `SetAllDesignPara` indices are defined in
+    PKPMAPI5.0参考手册, "楼层-设计参数":
+      24 = 设计地震分组
+      25 = 地震烈度
+      26 = 场地类别
+      30 = 计算振型个数
+      31 = 周期折减系数
+      33 = 修正后的基本风压
+      34 = 地面粗糙度类别
+      35/36/37 = 体型变化分段数 / 第一段最高层号 / 第一段体型系数
+
+    Some SATWE control values such as Tg and alpha max are persisted through
+    PMProjectPara field ids from PKPM结构数据SQLite化数据表及字段说明:
+      312 = 特征周期Tg
+      313 = 多遇地震影响系数最大值
+    The installed API stores 301/303 as compact internal values:
+      301 = 0/1/2 for 第一/第二/第三组
+      303 = 0/1/2/3/4 for I0/I1/II/III/IV
     """
     para = model.GetProjectPara()
 
@@ -533,6 +554,160 @@ def _configure_satwe_params(
     para.SetParaInt(101, 10101)
 
     model.SaveProjectPara()
+
+    project_para_updates_int: dict[int, int] = {}
+    project_para_updates_double: dict[int, float] = {}
+    design_param_updates: dict[int, float] = {}
+
+    def _as_float(value: Any) -> float | None:
+        try:
+            if value is None:
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _design_group_code(value: Any) -> float | None:
+        text = str(value or "")
+        if "1" in text or "一" in text:
+            return 1.0
+        if "2" in text or "二" in text or "两" in text:
+            return 2.0
+        if "3" in text or "三" in text:
+            return 3.0
+        return None
+
+    def _site_category_code(value: Any) -> float | None:
+        text = str(value or "").strip().upper().replace("类", "")
+        mapping = {
+            "1": 1.0, "一": 1.0, "I": 1.0,
+            "2": 2.0, "二": 2.0, "两": 2.0, "II": 2.0,
+            "3": 3.0, "三": 3.0, "III": 3.0,
+            "4": 4.0, "四": 4.0, "IV": 4.0,
+        }
+        return mapping.get(text)
+
+    def _terrain_roughness_code(value: Any) -> float | None:
+        text = str(value or "").strip().upper().replace("类", "")
+        mapping = {"A": 1.0, "B": 2.0, "C": 3.0, "D": 4.0}
+        return mapping.get(text)
+
+    site_seismic = _as_dict(site_seismic)
+    wind = _as_dict(wind)
+    analysis_control = _as_dict(analysis_control)
+
+    if site_seismic:
+        intensity = _as_float(site_seismic.get("intensity"))
+        site_category = _site_category_code(site_seismic.get("site_category"))
+        design_group = _design_group_code(site_seismic.get("design_group"))
+        if design_group is None:
+            characteristic_period = _as_float(site_seismic.get("characteristic_period"))
+            if site_category == 3.0 and characteristic_period is not None and characteristic_period >= 0.64:
+                design_group = 3.0
+            elif site_category == 2.0 and characteristic_period is not None and characteristic_period >= 0.44:
+                design_group = 3.0
+            elif characteristic_period is not None and characteristic_period >= 0.54:
+                design_group = 2.0
+        if intensity is not None:
+            design_param_updates[25] = intensity
+        if site_category is not None:
+            design_param_updates[26] = site_category
+            project_para_updates_int[303] = int(site_category)
+        if design_group is not None:
+            design_param_updates[24] = design_group
+            project_para_updates_int[301] = max(int(design_group) - 1, 0)
+        characteristic_period = _as_float(site_seismic.get("characteristic_period"))
+        if characteristic_period is not None:
+            project_para_updates_double[312] = characteristic_period
+        max_influence_coefficient = _as_float(site_seismic.get("max_influence_coefficient"))
+        if max_influence_coefficient is not None:
+            project_para_updates_double[313] = max_influence_coefficient
+        damping_ratio = _as_float(site_seismic.get("damping_ratio"))
+        if damping_ratio is not None:
+            project_para_updates_double[311] = damping_ratio * 100 if damping_ratio <= 1 else damping_ratio
+
+    if wind:
+        basic_pressure = _as_float(wind.get("basic_pressure"))
+        shape_factor = _as_float(wind.get("shape_factor"))
+        terrain_roughness = _terrain_roughness_code(wind.get("terrain_roughness"))
+        if basic_pressure is not None:
+            design_param_updates[33] = basic_pressure
+            project_para_updates_double[202] = basic_pressure
+        if terrain_roughness is not None:
+            design_param_updates[34] = terrain_roughness
+            project_para_updates_int[201] = int(terrain_roughness)
+        if shape_factor is not None:
+            design_param_updates[35] = 1.0
+            design_param_updates[37] = shape_factor
+
+    if analysis_control:
+        modal_count = _as_float(analysis_control.get("modal_count"))
+        if modal_count is not None:
+            design_param_updates[30] = modal_count
+            project_para_updates_int[308] = int(modal_count)
+        period_reduction = _as_float(analysis_control.get("period_reduction_factor"))
+        if period_reduction is not None:
+            design_param_updates[31] = period_reduction
+            project_para_updates_double[310] = period_reduction
+        basement_count = _as_float(analysis_control.get("basement_count"))
+        if basement_count is not None:
+            design_param_updates[4] = basement_count
+        importance_factor = _as_float(analysis_control.get("structure_importance_factor"))
+        if importance_factor is not None:
+            design_param_updates[2] = importance_factor
+
+    explicit_design_params = _as_dict(analysis_control.get("design_params"))
+    pkpm_design_params = _as_dict(explicit_design_params.get("pkpm"))
+    satwe_indices = _as_dict(pkpm_design_params.get("satwe_indices"))
+    for raw_index, raw_value in satwe_indices.items():
+        try:
+            index = int(raw_index)
+        except (TypeError, ValueError):
+            continue
+        value = _as_float(raw_value)
+        if value is not None:
+            design_param_updates[index] = value
+
+    for key, value in sorted(project_para_updates_int.items()):
+        try:
+            para.SetParaInt(key, value)
+        except Exception as exc:
+            sys.stderr.write(f"[pkpm_converter] ProjectPara.SetParaInt({key}, {value}) failed: {exc}\n")
+    for key, value in sorted(project_para_updates_double.items()):
+        try:
+            para.SetParaDouble(key, value)
+        except Exception as exc:
+            sys.stderr.write(f"[pkpm_converter] ProjectPara.SetParaDouble({key}, {value}) failed: {exc}\n")
+    if project_para_updates_int or project_para_updates_double:
+        try:
+            model.SaveProjectPara()
+        except Exception as exc:
+            sys.stderr.write(f"[pkpm_converter] SaveProjectPara failed: {exc}\n")
+
+    if not design_param_updates:
+        return
+
+    try:
+        design_params = list(model.GetAllDesignPara())
+    except Exception:
+        design_params = []
+    if len(design_params) < 128:
+        design_params.extend([0.0] * (128 - len(design_params)))
+    for index, value in sorted(design_param_updates.items()):
+        if 0 <= index < len(design_params):
+            design_params[index] = value
+
+    try:
+        model.SetAllDesignPara(design_params)
+        return
+    except Exception as exc:
+        sys.stderr.write(f"[pkpm_converter] SetAllDesignPara failed: {exc}\n")
+
+    for index, value in sorted(design_param_updates.items()):
+        try:
+            model.SetOneDesignParaValue(index, value)
+        except Exception as exc:
+            sys.stderr.write(f"[pkpm_converter] SetOneDesignParaValue({index}, {value}) failed: {exc}\n")
 
 
 def _log_design_params(model: APIPyInterface.Model) -> None:
@@ -615,10 +790,14 @@ def convert_v2_to_jws(
         mat_id_to_grade[mat["id"]] = grade
 
     # ---- Design parameters from V2 model ----
-    site_seismic = data.get("site_seismic") or {}
-    structure_system = data.get("structure_system") or {}
-    analysis_control = data.get("analysis_control") or {}
-    damping_ratio = float(site_seismic.get("damping_ratio", 0.0))
+    site_seismic = _as_dict(data.get("site_seismic"))
+    structure_system = _as_dict(data.get("structure_system"))
+    analysis_control = _as_dict(data.get("analysis_control"))
+    wind = _as_dict(data.get("wind"))
+    try:
+        damping_ratio = float(site_seismic.get("damping_ratio", 0.0))
+    except (TypeError, ValueError):
+        damping_ratio = 0.0
 
     # ---- Sections ----
     sec_registry = _build_section_registry(model, data.get("sections", []), data, material_family)
@@ -762,7 +941,7 @@ def convert_v2_to_jws(
         model.AddNaturalFloor(rf)
 
     # ---- Configure SATWE design parameters ----
-    _configure_satwe_params(model, material_family)
+    _configure_satwe_params(model, material_family, site_seismic, wind, analysis_control)
     if os.environ.get("PKPM_DEBUG_PARAMS"):
         _log_design_params(model)
 
@@ -774,4 +953,9 @@ def convert_v2_to_jws(
         "stories": stories,
         "normalization": normalization,
         "material_family": material_family,
+        "design_conditions": {
+            "site_seismic": site_seismic,
+            "wind": wind,
+            "analysis_control": analysis_control,
+        },
     }

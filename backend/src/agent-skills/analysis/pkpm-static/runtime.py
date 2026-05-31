@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import tempfile
 import uuid
@@ -165,6 +166,52 @@ def _read_satwe_params(result: Any) -> Dict[str, Any]:
     except Exception:
         pass
     return satwe_params
+
+
+def _read_wmass_design_params(project_dir: Path) -> Dict[str, Any]:
+    """Read actual SATWE design parameters printed in WMASS.OUT."""
+    path = project_dir / "WMASS.OUT"
+    if not path.is_file():
+        return {}
+    try:
+        text = path.read_bytes().decode("gb18030", errors="ignore")
+    except OSError:
+        return {}
+
+    def _match_float(pattern: str) -> float | None:
+        m = re.search(pattern, text)
+        return _safe_float(m.group(1), None) if m else None
+
+    def _match_text(pattern: str) -> str | None:
+        m = re.search(pattern, text)
+        return m.group(1).strip() if m else None
+
+    params: Dict[str, Any] = {}
+    for key, value in [
+        ("basic_wind_pressure", _match_float(r"WO\s*=\s*([\d.]+)")),
+        ("seismic_intensity", _match_float(r"NAF\s*=\s*([\d.]+)")),
+        ("mode_count", _match_float(r"NMODE\s*=\s*([\d.]+)")),
+        ("characteristic_period", _match_float(r"TG\s*=\s*([\d.]+)")),
+        ("max_influence_coefficient", _match_float(r"Rmax1\s*=\s*([\d.]+)")),
+        ("period_reduction_factor", _match_float(r"TC\s*=\s*([\d.]+)")),
+    ]:
+        if value is not None:
+            params[key] = value
+    damping = _match_float(r"DAMP\s*=\s*([\d.]+)")
+    if damping is not None:
+        params["damping_ratio"] = damping / 100.0 if damping > 1.0 else damping
+        params["damping_ratio_percent"] = damping if damping > 1.0 else damping * 100.0
+
+    terrain = _match_text(r"地面粗糙程度:\s*([ABCD])\s*类")
+    if terrain:
+        params["terrain_roughness"] = terrain
+    site_category = _match_text(r"场地类别:\s*KD\s*=\s*([A-Z0-9]+)")
+    if site_category:
+        params["site_category"] = site_category
+    design_group = _match_text(r"设计地震分组:\s*([一二三]组)")
+    if design_group:
+        params["design_group"] = design_group
+    return params
 
 
 def _extract_results(jws_path: Path, material_family: str = "steel") -> Dict[str, Any]:
@@ -394,6 +441,9 @@ def _extract_results(jws_path: Path, material_family: str = "steel") -> Dict[str
                 "limit_value": round(_safe_float(bs.GetLimitVal()), 4),
             })
 
+        satwe_params = _read_satwe_params(result)
+        satwe_params.update(_read_wmass_design_params(jws_path.parent))
+
         return {
             "mode_periods": mode_periods,
             "beam_count": len(beam_results),
@@ -413,7 +463,7 @@ def _extract_results(jws_path: Path, material_family: str = "steel") -> Dict[str
             "case_node_disps": case_node_disps,
             "case_beam_forces": case_beam_forces,
             "case_col_forces": case_col_forces,
-            "satwe_params": _read_satwe_params(result),
+            "satwe_params": satwe_params,
         }
     finally:
         result.ClearResult()
@@ -490,6 +540,7 @@ def run_analysis(model: Dict[str, Any], parameters: Dict[str, Any]) -> Dict[str,
     node_disps = extracted.get("node_displacements", [])
     beams = extracted.get("beams", [])
     columns = extracted.get("columns", [])
+    design_conditions = converter_mappings.get("design_conditions", {})
 
     # ---- Build V2 node → PKPM (floor, pmid) mapping ----
     v2_to_pm: Dict[str, int] = converter_mappings.get("v2_to_pm", {})
@@ -831,6 +882,7 @@ def run_analysis(model: Dict[str, Any], parameters: Dict[str, Any]) -> Dict[str,
             "floors_analyzed": floors_analyzed,
             "beam_count": extracted.get("beam_count", 0),
             "column_count": extracted.get("column_count", 0),
+            "designConditions": design_conditions,
             **pkpm_summary,
         },
         "pkpm_detailed": {
@@ -842,6 +894,7 @@ def run_analysis(model: Dict[str, Any], parameters: Dict[str, Any]) -> Dict[str,
             "storey_stiffness": extracted.get("storey_stiffness", []),
             "bearing_shear": extracted.get("bearing_shear", []),
             "satwe_params": extracted.get("satwe_params", {}),
+            "input_design_conditions": design_conditions,
         },
         "caseResults": case_results,
         "envelopeTables": {
