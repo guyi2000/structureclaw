@@ -11,6 +11,9 @@ const { runBackendRegression } = require("./regression/backend-regression.js");
 const { runAnalysisRegression } = require("./regression/analysis-regression.js");
 const { runNativeInstallSmoke } = require("./smoke/install-smoke.cjs");
 
+// Benchmark runner lives in a git submodule (tests/llm-benchmark). Set
+// SCLAW_ROOT so it can locate the SUT (this repo) before it is required.
+process.env.SCLAW_ROOT = rootDir;
 const { runBenchmark } = require("./llm-benchmark/runner.cjs");
 
 function parseCliOptions(args) {
@@ -142,7 +145,7 @@ async function main() {
       await runNativeInstallSmoke(rootDir);
       return;
     case "llm-benchmark":
-      await runBenchmark(rootDir, rawArgs);
+      await runBenchmark(rawArgs);
       return;
     default:
       throw new Error(`Unknown command: ${cmd}`);
